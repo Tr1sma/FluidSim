@@ -151,7 +151,6 @@ namespace FluidSimulation
                 int cx = (int)(posX[i] / GridCellSize);
                 int cy = (int)(posY[i] / GridCellSize);
 
-                // Boundary Checks
                 if (cx < 0) cx = 0; else if (cx >= gridCols) cx = gridCols - 1;
                 if (cy < 0) cy = 0; else if (cy >= gridRows) cy = gridRows - 1;
 
