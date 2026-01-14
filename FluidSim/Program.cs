@@ -43,7 +43,7 @@ namespace FluidSimulation
         private float[] accX = new float[MaxParticles];
         private float[] accY = new float[MaxParticles];
 
-
+        private const float PhysikHzRate = 200.0f;
 
         private const int GridCellSize = 12; // >= CollisionRadius NICHT KLEINER SONST KRACHTS!!!!!!!!!
         private int gridCols;
@@ -74,6 +74,9 @@ namespace FluidSimulation
 
         public void Run()
         {
+            const float PhysicsStep = 1.0f / PhysikHzRate;
+            double accumulator = 0.0;
+
             while (!Raylib.WindowShouldClose())
             {
                 mousePosition = Raylib.GetMousePosition();
@@ -81,12 +84,22 @@ namespace FluidSimulation
                 if (Raylib.IsMouseButtonDown(MouseButton.Left)) currentMouseButtons |= MouseButtons.Left;
                 if (Raylib.IsMouseButtonDown(MouseButton.Right)) currentMouseButtons |= MouseButtons.Right;
 
-                UpdateSimulation();
+                double frameTime = Raylib.GetFrameTime();
+
+                if (frameTime > 0.25) frameTime = 0.25;
+
+                accumulator += frameTime;
+
+                while (accumulator >= PhysicsStep)
+                {
+                    UpdateSimulation(PhysicsStep);
+                    accumulator -= PhysicsStep;
+                }
 
                 Raylib.BeginDrawing();
                 Raylib.ClearBackground(Color.Black);
 
-                //DrawGridDebug(); 
+                // DrawGridDebug(); 
 
                 for (int i = 0; i < particleCount; i++)
                 {
@@ -95,6 +108,7 @@ namespace FluidSimulation
 
                 Raylib.DrawRectangle(5, 5, 100, 25, new Color(0, 0, 0, 160));
                 Raylib.DrawText($"FPS: {Raylib.GetFPS()}", 5, 5, 20, Color.Lime);
+                Raylib.DrawText($"PhysSteps: {1.0f / PhysicsStep:F0} Hz", 5, 30, 10, Color.Gray);
 
                 string countText = $"Particles: {particleCount}";
                 Raylib.DrawRectangle(Raylib.GetScreenWidth() - 160, 5, 150, 45, new Color(0, 0, 0, 160));
@@ -120,11 +134,8 @@ namespace FluidSimulation
             }
         }
 
-        private void UpdateSimulation()
+        private void UpdateSimulation(float deltaTime)
         {
-            float deltaTime = Raylib.GetFrameTime();
-            if (deltaTime > 0.1f) deltaTime = 0.1f;
-
             if ((currentMouseButtons & MouseButtons.Right) != 0) SpawnParticles();
 
             UpdateGrid();
