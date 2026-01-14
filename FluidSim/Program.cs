@@ -44,7 +44,7 @@ namespace FluidSimulation
         private const float RepulsionForce = 2000f;
         private const float DampingFactor = 10f;
 
-        private const float PhysikHzRate = 200.0f;
+        private const float PhysikHzRate = 100.0f;
 
         private const int GridCellSize = 12; // >= CollisionRadius NICHT KLEINER SONST KRACHTS!!!!!!!!!
         private int gridCols;
