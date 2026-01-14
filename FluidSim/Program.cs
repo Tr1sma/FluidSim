@@ -1,6 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Diagnostics;
 using System.Numerics;
 using Raylib_cs;
 
@@ -11,7 +9,7 @@ namespace FluidSimulation
         public static void Main()
         {
             Raylib.InitWindow(800, 450, "Fluid Simulation");
-            Raylib.SetTargetFPS(60);
+            Raylib.SetTargetFPS(9999); 
 
             var sim = new Simulation();
             sim.Run();
@@ -20,74 +18,84 @@ namespace FluidSimulation
 
     public class Simulation
     {
-        private const int ParticleCount = 500;
+        private const int MaxParticles = 4000; 
+        private int particleCount = 0;
+        private const int InitialCount = 500;
+
         private const float ParticleMass = 5f;
         private const float MouseForce = -1000f;
         private const float MouseRadius = 100f;
-
         private const float CollisionRadius = 10f;
         private const float RepulsionForce = 2000f;
         private const float DampingFactor = 10f;
-        private const float WallMargin = 20f;
-        private const float WallForce = 20f;
+        private const float WallMargin = 20;
+        private const float WallForce = 200f;
+        private const float GravityY = 9.81f * 10f;
 
-        private readonly List<Particle> particles = new List<Particle>();
+        private float[] posX = new float[MaxParticles];
+        private float[] posY = new float[MaxParticles];
+        private float[] velX = new float[MaxParticles];
+        private float[] velY = new float[MaxParticles];
+        private float[] accX = new float[MaxParticles];
+        private float[] accY = new float[MaxParticles];
+
+        private const int GridCellSize = 12; // >= CollisionRadius NICHT KLEINER SONST KRACHTS!!!!!!!!!
+        private int gridCols;
+        private int gridRows;
+        private int[] gridHeads;      
+        private int[] nextParticle;
+
         private Vector2 mousePosition;
         private MouseButtons currentMouseButtons = MouseButtons.None;
 
-        private readonly Stopwatch stopwatch = new Stopwatch();
-        private double frameCount = 0;
-        private double currentFps = 0;
-        private double timeSinceLastFpsUpdate = 0;
-        private double lastFrameTime = 0;
-        private Vector2 gravity = new(0, 9.81f * 10f);
-
         public Simulation()
         {
+            InitializeGrid();
             InitializeParticles();
-            stopwatch.Start();
+        }
+
+        private void InitializeGrid()
+        {
+            int width = Raylib.GetScreenWidth();
+            int height = Raylib.GetScreenHeight();
+
+            gridCols = (width / GridCellSize) + 1; 
+            gridRows = (height / GridCellSize) + 1;
+
+            gridHeads = new int[gridCols * gridRows];
+            nextParticle = new int[MaxParticles];
         }
 
         public void Run()
         {
             while (!Raylib.WindowShouldClose())
             {
-                // Input
                 mousePosition = Raylib.GetMousePosition();
                 currentMouseButtons = MouseButtons.None;
                 if (Raylib.IsMouseButtonDown(MouseButton.Left)) currentMouseButtons |= MouseButtons.Left;
                 if (Raylib.IsMouseButtonDown(MouseButton.Right)) currentMouseButtons |= MouseButtons.Right;
 
-                // Update
                 UpdateSimulation();
 
-                // Draw
                 Raylib.BeginDrawing();
                 Raylib.ClearBackground(Color.Black);
 
-                foreach (var particle in particles)
+                //DrawGridDebug(); 
+
+                for (int i = 0; i < particleCount; i++)
                 {
-                    Raylib.DrawCircleV(particle.Position, 4, Color.SkyBlue);
+                    Raylib.DrawCircleV(new Vector2(posX[i], posY[i]), 4, Color.SkyBlue);
                 }
 
-                // UI
                 Raylib.DrawRectangle(5, 5, 100, 25, new Color(0, 0, 0, 160));
-                Raylib.DrawText($"FPS: {currentFps:F1}", 10, 10, 20, Color.Lime);
+                Raylib.DrawText($"FPS: {Raylib.GetFPS()}", 5, 5, 20, Color.Lime);
 
-                string countText = $"Particles: {particles.Count}";
-                string helpText = "L-Click: Attract | R-Click: Spawn";
-
-                int screenWidth = Raylib.GetScreenWidth();
-                int panelW = 220;
-                int panelX = screenWidth - panelW - 5;
-
-                Raylib.DrawRectangle(panelX, 5, panelW, 45, new Color(0, 0, 0, 160));
-                Raylib.DrawText(countText, panelX + 5, 10, 20, Color.White);
-                Raylib.DrawText(helpText, panelX + 5, 25, 20, Color.Orange);
+                string countText = $"Particles: {particleCount}";
+                Raylib.DrawRectangle(Raylib.GetScreenWidth() - 160, 5, 150, 45, new Color(0, 0, 0, 160));
+                Raylib.DrawText(countText, Raylib.GetScreenWidth() - 155, 10, 20, Color.White);
 
                 Raylib.EndDrawing();
             }
-
             Raylib.CloseWindow();
         }
 
@@ -97,57 +105,63 @@ namespace FluidSimulation
             int width = Raylib.GetScreenWidth();
             int height = Raylib.GetScreenHeight();
 
-            for (int i = 0; i < ParticleCount; i++)
+            for (int i = 0; i < InitialCount; i++)
             {
-                particles.Add(new Particle
-                {
-                    Position = new Vector2(
-                        rand.Next(width / 2 - 50, width / 2 + 50),
-                        rand.Next(height / 2 - 50, height / 2 + 50)),
-                    Velocity = Vector2.Zero
-                });
+                if (particleCount >= MaxParticles) break;
+                posX[particleCount] = rand.Next(width / 2 - 100, width / 2 + 100);
+                posY[particleCount] = rand.Next(height / 2 - 100, height / 2 + 100);
+                particleCount++;
             }
         }
 
         private void UpdateSimulation()
         {
-            double currentTime = stopwatch.Elapsed.TotalSeconds;
-            float deltaTime = (float)(currentTime - lastFrameTime);
-            lastFrameTime = currentTime;
-
-            frameCount++;
-            timeSinceLastFpsUpdate += deltaTime;
-            if (timeSinceLastFpsUpdate >= 1.0)
-            {
-                currentFps = frameCount / timeSinceLastFpsUpdate;
-                frameCount = 0;
-                timeSinceLastFpsUpdate = 0;
-            }
-
+            float deltaTime = Raylib.GetFrameTime();
             if (deltaTime > 0.1f) deltaTime = 0.1f;
 
-            if ((currentMouseButtons & MouseButtons.Right) != 0)
-            {
-                SpawnParticles();
-            }
+            if ((currentMouseButtons & MouseButtons.Right) != 0) SpawnParticles();
 
+            UpdateGrid();
             CalculateForces();
             UpdateParticles(deltaTime);
         }
 
         private void SpawnParticles()
         {
+            if (particleCount >= MaxParticles) return;
             var rand = new Random();
-            for (int i = 0; i < 5; i++)
+            for (int k = 0; k < 5; k++) 
             {
-                particles.Add(new Particle
-                {
-                    Position = mousePosition + new Vector2(
-                        rand.Next(-10, 10),
-                        rand.Next(-10, 10)),
-                    Velocity = new Vector2(rand.Next(-20, 20), 50)
-                });
+                if (particleCount >= MaxParticles) return;
+                posX[particleCount] = mousePosition.X + rand.Next(-10, 10);
+                posY[particleCount] = mousePosition.Y + rand.Next(-10, 10);
+                velY[particleCount] = 50;
+                particleCount++;
             }
+        }
+
+        private void UpdateGrid()
+        {
+            // Reset grid heads. -1 is empty
+            Array.Fill(gridHeads, -1);
+
+            Parallel.For(0, particleCount, i =>
+            {
+                //Cell Koordinaten
+                int cx = (int)(posX[i] / GridCellSize);
+                int cy = (int)(posY[i] / GridCellSize);
+
+                // Boundary Checks
+                if (cx < 0) cx = 0; else if (cx >= gridCols) cx = gridCols - 1;
+                if (cy < 0) cy = 0; else if (cy >= gridRows) cy = gridRows - 1;
+
+                int cellIndex = cy * gridCols + cx;
+
+                //aktuellr Head wird zum Next dieses Partikels
+                nextParticle[i] = gridHeads[cellIndex];
+                //Partikel wird neuer Head der zelle
+                gridHeads[cellIndex] = i;
+            });
         }
 
         private void CalculateForces()
@@ -155,115 +169,111 @@ namespace FluidSimulation
             int width = Raylib.GetScreenWidth();
             int height = Raylib.GetScreenHeight();
 
-            foreach (var particle in particles)
+            Parallel.For(0, particleCount, i =>
             {
-                Vector2 collisionForce = Vector2.Zero;
+                float forceX = 0;
+                float forceY = 0;
 
-                // Wandabstoßung berechnen
-                if (particle.Position.X < WallMargin)
-                {
-                    collisionForce.X += (WallMargin - particle.Position.X) * WallForce;
-                }
-                if (particle.Position.X > width - WallMargin)
-                {
-                    collisionForce.X -= (particle.Position.X - (width - WallMargin)) * WallForce;
-                }
-                if (particle.Position.Y < WallMargin)
-                {
-                    collisionForce.Y += (WallMargin - particle.Position.Y) * WallForce;
-                }
-                if (particle.Position.Y > height - WallMargin)
-                {
-                    collisionForce.Y -= (particle.Position.Y - (height - WallMargin)) * WallForce;
-                }
+                if (posX[i] < WallMargin) forceX += (WallMargin - posX[i]) * WallForce;
+                if (posX[i] > width - WallMargin) forceX -= (posX[i] - (width - WallMargin)) * WallForce;
+                if (posY[i] < WallMargin) forceY += (WallMargin - posY[i]) * WallForce;
+                if (posY[i] > height - WallMargin) forceY -= (posY[i] - (height - WallMargin)) * WallForce;
 
-                foreach (var other in particles)
+                int cx = (int)(posX[i] / GridCellSize);
+                int cy = (int)(posY[i] / GridCellSize);
+
+                int startX = Math.Max(0, cx - 1);
+                int endX = Math.Min(gridCols - 1, cx + 1);
+                int startY = Math.Max(0, cy - 1);
+                int endY = Math.Min(gridRows - 1, cy + 1);
+
+                for (int y = startY; y <= endY; y++)
                 {
-                    if (particle == other) continue;
-
-                    Vector2 offset = particle.Position - other.Position;
-                    float distance = offset.Length();
-
-                    if (distance < CollisionRadius && distance > 0)
+                    for (int x = startX; x <= endX; x++)
                     {
-                        Vector2 dir = offset / distance;
-                        float overlap = CollisionRadius - distance;
-                        collisionForce += dir * overlap * RepulsionForce;
+                        int cellIndex = y * gridCols + x;
 
-                        Vector2 relVel = other.Velocity - particle.Velocity;
-                        collisionForce += relVel * DampingFactor;
+                        int neighborIdx = gridHeads[cellIndex];
+                        while (neighborIdx != -1)
+                        {
+                            if (i != neighborIdx)
+                            {
+                                float offX = posX[i] - posX[neighborIdx];
+                                float offY = posY[i] - posY[neighborIdx];
+
+                                if (Math.Abs(offX) < CollisionRadius && Math.Abs(offY) < CollisionRadius)
+                                {
+                                    float distSqr = offX * offX + offY * offY;
+                                    if (distSqr < CollisionRadius * CollisionRadius && distSqr > 0.0001f)
+                                    {
+                                        float distance = MathF.Sqrt(distSqr);
+                                        float dirX = offX / distance;
+                                        float dirY = offY / distance;
+                                        float overlap = CollisionRadius - distance;
+
+                                        forceX += dirX * overlap * RepulsionForce;
+                                        forceY += dirY * overlap * RepulsionForce;
+
+                                        float relVelX = velX[neighborIdx] - velX[i];
+                                        float relVelY = velY[neighborIdx] - velY[i];
+                                        forceX += relVelX * DampingFactor;
+                                        forceY += relVelY * DampingFactor;
+                                    }
+                                }
+                            }
+                            neighborIdx = nextParticle[neighborIdx];
+                        }
                     }
                 }
 
-                particle.Acceleration = gravity + (collisionForce / ParticleMass);
+                accX[i] = (forceX / ParticleMass);
+                accY[i] = GravityY + (forceY / ParticleMass);
 
-                ApplyMouseInteraction(particle);
-            }
-        }
-
-        private void ApplyMouseInteraction(Particle particle)
-        {
-            if ((currentMouseButtons & MouseButtons.Left) != 0)
-            {
-                Vector2 toMouse = mousePosition - particle.Position;
-                float distance = toMouse.Length();
-                if (distance < MouseRadius)
+                if ((currentMouseButtons & MouseButtons.Left) != 0)
                 {
-                    particle.Acceleration += toMouse * MouseForce / (distance + 1f);
+                    float tmX = mousePosition.X - posX[i];
+                    float tmY = mousePosition.Y - posY[i];
+                    float dSq = tmX * tmX + tmY * tmY;
+                    if (dSq < MouseRadius * MouseRadius)
+                    {
+                        float dist = MathF.Sqrt(dSq);
+                        float f = MouseForce / (dist + 1f);
+                        accX[i] += tmX * f;
+                        accY[i] += tmY * f;
+                    }
                 }
-            }
+            });
         }
 
         private void UpdateParticles(float deltaTime)
         {
             const float boundaryFriction = 0.5f;
             const float bounce = -0.2f;
-
             int width = Raylib.GetScreenWidth();
             int height = Raylib.GetScreenHeight();
 
-            foreach (var particle in particles)
+            Parallel.For(0, particleCount, i =>
             {
-                particle.Velocity += particle.Acceleration * deltaTime;
-                particle.Position += particle.Velocity * deltaTime;
+                velX[i] += accX[i] * deltaTime;
+                velY[i] += accY[i] * deltaTime;
+                posX[i] += velX[i] * deltaTime;
+                posY[i] += velY[i] * deltaTime;
 
-                if (particle.Position.X < 0)
-                {
-                    particle.Position.X = 0;
-                    particle.Velocity.X *= bounce;
-                }
-                if (particle.Position.Y < 0)
-                {
-                    particle.Position.Y = 0;
-                    particle.Velocity.Y *= bounce;
-                }
-                if (particle.Position.X > width)
-                {
-                    particle.Position.X = width;
-                    particle.Velocity.X *= bounce;
-                }
-                if (particle.Position.Y > height)
-                {
-                    particle.Position.Y = height;
-                    particle.Velocity.Y *= bounce;
-                    particle.Velocity.X *= boundaryFriction;
-                }
-            }
+                if (posX[i] < 0) { posX[i] = 0; velX[i] *= bounce; }
+                if (posY[i] < 0) { posY[i] = 0; velY[i] *= bounce; }
+                if (posX[i] > width) { posX[i] = width; velX[i] *= bounce; }
+                if (posY[i] > height) { posY[i] = height; velY[i] *= bounce; velX[i] *= boundaryFriction; }
+            });
         }
 
-        private class Particle
+        private void DrawGridDebug()
         {
-            public Vector2 Position;
-            public Vector2 Velocity;
-            public Vector2 Acceleration;
+            for (int x = 0; x < gridCols; x++)
+                Raylib.DrawLine(x * GridCellSize, 0, x * GridCellSize, Raylib.GetScreenHeight(), new Color(30, 30, 30, 255));
+            for (int y = 0; y < gridRows; y++)
+                Raylib.DrawLine(0, y * GridCellSize, Raylib.GetScreenWidth(), y * GridCellSize, new Color(30, 30, 30, 255));
         }
 
-        [Flags]
-        private enum MouseButtons
-        {
-            None = 0,
-            Left = 1,
-            Right = 2
-        }
+        [Flags] private enum MouseButtons { None = 0, Left = 1, Right = 2 }
     }
 }
