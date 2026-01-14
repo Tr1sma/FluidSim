@@ -23,12 +23,8 @@ namespace FluidSimulation
         private int particleCount = 0;
         private const int InitialCount = 1500;
 
-        private const float ParticleMass = 5f;
         private const float MouseForce = -1000f;
         private const float MouseRadius = 100f;
-        private const float CollisionRadius = 10f;
-        private const float RepulsionForce = 2000f;
-        private const float DampingFactor = 10f;
         private const float WallMargin = 20;
         private const float WallForce = 200f + GravityY;
 
@@ -42,6 +38,11 @@ namespace FluidSimulation
         private float[] velY = new float[MaxParticles];
         private float[] accX = new float[MaxParticles];
         private float[] accY = new float[MaxParticles];
+
+        private const float ParticleMass = 5f;
+        private const float CollisionRadius = 10f;
+        private const float RepulsionForce = 2000f;
+        private const float DampingFactor = 10f;
 
         private const float PhysikHzRate = 200.0f;
 
