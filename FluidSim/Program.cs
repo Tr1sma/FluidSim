@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using Raylib_cs;
 
 namespace FluidSimulation
@@ -18,9 +19,9 @@ namespace FluidSimulation
 
     public class Simulation
     {
-        private const int MaxParticles = 4000; 
+        private const int MaxParticles = 10000; 
         private int particleCount = 0;
-        private const int InitialCount = 500;
+        private const int InitialCount = 1500;
 
         private const float ParticleMass = 5f;
         private const float MouseForce = -1000f;
@@ -29,8 +30,11 @@ namespace FluidSimulation
         private const float RepulsionForce = 2000f;
         private const float DampingFactor = 10f;
         private const float WallMargin = 20;
-        private const float WallForce = 200f;
-        private const float GravityY = 9.81f * 10f;
+        private const float WallForce = 200f + GravityY;
+
+        private const float GravityY = 45f * 10f;
+        //9.81 gewichtskraft erde
+        //45 für wasser ähnliches verhalten
 
         private float[] posX = new float[MaxParticles];
         private float[] posY = new float[MaxParticles];
@@ -38,6 +42,8 @@ namespace FluidSimulation
         private float[] velY = new float[MaxParticles];
         private float[] accX = new float[MaxParticles];
         private float[] accY = new float[MaxParticles];
+
+
 
         private const int GridCellSize = 12; // >= CollisionRadius NICHT KLEINER SONST KRACHTS!!!!!!!!!
         private int gridCols;
@@ -145,8 +151,8 @@ namespace FluidSimulation
             // Reset grid heads. -1 is empty
             Array.Fill(gridHeads, -1);
 
-            Parallel.For(0, particleCount, i =>
-            {
+           for(int i = 0; i < particleCount; i ++)
+           {
                 //Cell Koordinaten
                 int cx = (int)(posX[i] / GridCellSize);
                 int cy = (int)(posY[i] / GridCellSize);
@@ -160,88 +166,118 @@ namespace FluidSimulation
                 nextParticle[i] = gridHeads[cellIndex];
                 //Partikel wird neuer Head der zelle
                 gridHeads[cellIndex] = i;
-            });
+           };
         }
 
-        private void CalculateForces()
+        private unsafe void CalculateForces()
         {
             int width = Raylib.GetScreenWidth();
             int height = Raylib.GetScreenHeight();
 
-            Parallel.For(0, particleCount, i =>
+            fixed (float* pPosX = posX, pPosY = posY, pVelX = velX, pVelY = velY, pAccX = accX, pAccY = accY)
+            fixed (int* pGridHeads = gridHeads, pNextParticle = nextParticle)
             {
-                float forceX = 0;
-                float forceY = 0;
+                long addrPosX = (long)pPosX;
+                long addrPosY = (long)pPosY;
+                long addrVelX = (long)pVelX;
+                long addrVelY = (long)pVelY;
+                long addrAccX = (long)pAccX;
+                long addrAccY = (long)pAccY;
 
-                if (posX[i] < WallMargin) forceX += (WallMargin - posX[i]) * WallForce;
-                if (posX[i] > width - WallMargin) forceX -= (posX[i] - (width - WallMargin)) * WallForce;
-                if (posY[i] < WallMargin) forceY += (WallMargin - posY[i]) * WallForce;
-                if (posY[i] > height - WallMargin) forceY -= (posY[i] - (height - WallMargin)) * WallForce;
+                long addrGridHeads = (long)pGridHeads;
+                long addrNextParticle = (long)pNextParticle;
 
-                int cx = (int)(posX[i] / GridCellSize);
-                int cy = (int)(posY[i] / GridCellSize);
-
-                int startX = Math.Max(0, cx - 1);
-                int endX = Math.Min(gridCols - 1, cx + 1);
-                int startY = Math.Max(0, cy - 1);
-                int endY = Math.Min(gridRows - 1, cy + 1);
-
-                for (int y = startY; y <= endY; y++)
+                Parallel.For(0, particleCount, i =>
                 {
-                    for (int x = startX; x <= endX; x++)
+                    float* lPosX = (float*)addrPosX;
+                    float* lPosY = (float*)addrPosY;
+                    float* lVelX = (float*)addrVelX;
+                    float* lVelY = (float*)addrVelY;
+                    float* lAccX = (float*)addrAccX;
+                    float* lAccY = (float*)addrAccY;
+
+                    int* lGridHeads = (int*)addrGridHeads;
+                    int* lNextParticle = (int*)addrNextParticle;
+
+                    float forceX = 0;
+                    float forceY = 0;
+
+                    float myX = lPosX[i];
+                    float myY = lPosY[i];
+
+                    if (myX < WallMargin) forceX += (WallMargin - myX) * WallForce;
+                    else if (myX > width - WallMargin) forceX -= (myX - (width - WallMargin)) * WallForce;
+
+                    if (myY < WallMargin) forceY += (WallMargin - myY) * WallForce;
+                    else if (myY > height - WallMargin) forceY -= (myY - (height - WallMargin)) * WallForce;
+
+                    int cx = (int)(myX / GridCellSize);
+                    int cy = (int)(myY / GridCellSize);
+
+                    if (cx < 0) cx = 0; else if (cx >= gridCols) cx = gridCols - 1;
+                    if (cy < 0) cy = 0; else if (cy >= gridRows) cy = gridRows - 1;
+
+                    int startX = cx > 0 ? cx - 1 : 0;
+                    int endX = cx < gridCols - 1 ? cx + 1 : gridCols - 1;
+                    int startY = cy > 0 ? cy - 1 : 0;
+                    int endY = cy < gridRows - 1 ? cy + 1 : gridRows - 1;
+
+                    for (int y = startY; y <= endY; y++)
                     {
-                        int cellIndex = y * gridCols + x;
-
-                        int neighborIdx = gridHeads[cellIndex];
-                        while (neighborIdx != -1)
+                        int rowOffset = y * gridCols;
+                        for (int x = startX; x <= endX; x++)
                         {
-                            if (i != neighborIdx)
+                            int cellIndex = rowOffset + x;
+                            int neighborIdx = lGridHeads[cellIndex];
+
+                            while (neighborIdx != -1)
                             {
-                                float offX = posX[i] - posX[neighborIdx];
-                                float offY = posY[i] - posY[neighborIdx];
-
-                                if (Math.Abs(offX) < CollisionRadius && Math.Abs(offY) < CollisionRadius)
+                                if (i != neighborIdx)
                                 {
-                                    float distSqr = offX * offX + offY * offY;
-                                    if (distSqr < CollisionRadius * CollisionRadius && distSqr > 0.0001f)
+                                    float offX = myX - lPosX[neighborIdx];
+                                    float offY = myY - lPosY[neighborIdx];
+
+                                    if (Math.Abs(offX) < CollisionRadius && Math.Abs(offY) < CollisionRadius)
                                     {
-                                        float distance = MathF.Sqrt(distSqr);
-                                        float dirX = offX / distance;
-                                        float dirY = offY / distance;
-                                        float overlap = CollisionRadius - distance;
+                                        float distSqr = offX * offX + offY * offY;
+                                        if (distSqr < CollisionRadius * CollisionRadius && distSqr > 0.0001f)
+                                        {
+                                            float distance = MathF.Sqrt(distSqr);
+                                            float factor = (CollisionRadius - distance) / distance * RepulsionForce;
 
-                                        forceX += dirX * overlap * RepulsionForce;
-                                        forceY += dirY * overlap * RepulsionForce;
+                                            forceX += offX * factor;
+                                            forceY += offY * factor;
 
-                                        float relVelX = velX[neighborIdx] - velX[i];
-                                        float relVelY = velY[neighborIdx] - velY[i];
-                                        forceX += relVelX * DampingFactor;
-                                        forceY += relVelY * DampingFactor;
+                                            float relVelX = lVelX[neighborIdx] - lVelX[i];
+                                            float relVelY = lVelY[neighborIdx] - lVelY[i];
+                                            forceX += relVelX * DampingFactor;
+                                            forceY += relVelY * DampingFactor;
+                                        }
                                     }
                                 }
+                                neighborIdx = lNextParticle[neighborIdx];
                             }
-                            neighborIdx = nextParticle[neighborIdx];
                         }
                     }
-                }
 
-                accX[i] = (forceX / ParticleMass);
-                accY[i] = GravityY + (forceY / ParticleMass);
+                    lAccX[i] = (forceX / ParticleMass);
+                    lAccY[i] = GravityY + (forceY / ParticleMass);
 
-                if ((currentMouseButtons & MouseButtons.Left) != 0)
-                {
-                    float tmX = mousePosition.X - posX[i];
-                    float tmY = mousePosition.Y - posY[i];
-                    float dSq = tmX * tmX + tmY * tmY;
-                    if (dSq < MouseRadius * MouseRadius)
+                    if ((currentMouseButtons & MouseButtons.Left) != 0)
                     {
-                        float dist = MathF.Sqrt(dSq);
-                        float f = MouseForce / (dist + 1f);
-                        accX[i] += tmX * f;
-                        accY[i] += tmY * f;
+                        float tmX = mousePosition.X - posX[i];
+                        float tmY = mousePosition.Y - posY[i];
+                        float dSq = tmX * tmX + tmY * tmY;
+                        if (dSq < MouseRadius * MouseRadius)
+                        {
+                            float dist = MathF.Sqrt(dSq);
+                            float f = MouseForce / (dist + 1f);
+                            accX[i] += tmX * f;
+                            accY[i] += tmY * f;
+                        }
                     }
-                }
-            });
+                });
+            }
         }
 
         private void UpdateParticles(float deltaTime)
