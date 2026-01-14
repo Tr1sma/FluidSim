@@ -9,7 +9,7 @@ namespace FluidSimulation
     {
         public static void Main()
         {
-            Raylib.InitWindow(800, 450, "Fluid Simulation");
+            Raylib.InitWindow(1920, 1080, "Fluid Simulation");
             Raylib.SetTargetFPS(9999); 
 
             using var sim = new Simulation();
@@ -19,7 +19,7 @@ namespace FluidSimulation
 
     public class Simulation : IDisposable
     {
-        private const int MaxParticles = 35000; 
+        private const int MaxParticles = 150000; 
         private int particleCount = 0;
         private const int InitialCount = 1500;
 
