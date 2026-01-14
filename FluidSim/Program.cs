@@ -32,7 +32,7 @@ namespace FluidSimulation
         private const float WallMargin = 20;
         private const float WallForce = 200f + GravityY;
 
-        private const float GravityY = 45f * 10f;
+        private const float GravityY = 9.81f * 100f;
         //9.81 gewichtskraft erde
         //45 für wasser ähnliches verhalten
 
@@ -174,6 +174,7 @@ namespace FluidSimulation
             int width = Raylib.GetScreenWidth();
             int height = Raylib.GetScreenHeight();
 
+            //TODO Pre sort the list so particles in same cell are close in memory
             fixed (float* pPosX = posX, pPosY = posY, pVelX = velX, pVelY = velY, pAccX = accX, pAccY = accY)
             fixed (int* pGridHeads = gridHeads, pNextParticle = nextParticle)
             {
