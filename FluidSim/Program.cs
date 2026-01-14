@@ -19,7 +19,7 @@ namespace FluidSimulation
 
     public class Simulation
     {
-        private const int MaxParticles = 10000; 
+        private const int MaxParticles = 20000; 
         private int particleCount = 0;
         private const int InitialCount = 1500;
 
@@ -300,7 +300,7 @@ namespace FluidSimulation
             int width = Raylib.GetScreenWidth();
             int height = Raylib.GetScreenHeight();
 
-            Parallel.For(0, particleCount, i =>
+            for(int i = 0; i < particleCount; i++)
             {
                 velX[i] += accX[i] * deltaTime;
                 velY[i] += accY[i] * deltaTime;
@@ -311,7 +311,7 @@ namespace FluidSimulation
                 if (posY[i] < 0) { posY[i] = 0; velY[i] *= bounce; }
                 if (posX[i] > width) { posX[i] = width; velX[i] *= bounce; }
                 if (posY[i] > height) { posY[i] = height; velY[i] *= bounce; velX[i] *= boundaryFriction; }
-            });
+            }
         }
 
         private void DrawGridDebug()
