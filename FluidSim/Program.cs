@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Numerics;
 using Raylib_cs;
 using ComputeSharp;
@@ -9,8 +9,8 @@ namespace FluidSimulation
     {
         public static void Main()
         {
-            Raylib.InitWindow(800, 450, "Fluid Simulation");
-            Raylib.SetTargetFPS(9999); 
+            Raylib.InitWindow(1000, 600, "Fluid Simulation - SPH 2D");
+            Raylib.SetTargetFPS(60); 
 
             using var sim = new Simulation();
             sim.Run();
@@ -19,44 +19,46 @@ namespace FluidSimulation
 
     public class Simulation : IDisposable
     {
-        private const int MaxParticles = 10000; //bis 7000 für Arbeit und bis 150000 für privat
+        private const int MaxParticles = 4000; // Fewer particles but larger
         private int particleCount = 0;
-        private const int InitialCount = 1500;
+        private const int InitialCount = 2000;
 
-        private const float MouseForce = -2500f;
-        private const float MouseRadius = 100f;
-        private const int ParticlesToSpawn = 10;
+        // SPH Constants
+        private const float SmoothingRadius = 24.0f; 
+        private const float GridCellSize = SmoothingRadius; 
+        private const float RestDensity = 1.0f; 
+        private const float Stiffness = 2000f; 
+        private const float Viscosity = 300f; 
+        
+        // Target Spacing ~ 6 pixels. 
+        // Mass approx = RestDensity * Spacing^2 = 1 * 36 = 36.
+        private const float ParticleMass = 25.0f; 
 
-        private const float WallMargin = 3;
-        private const float WallForce = 2000f + GravityY;
-
-        private const float GravityY = 9.81f * 100f;
+        private const float GravityY = 9.81f * 60f; 
+        private const float WallDamping = -0.5f;
+        
+        // Interaction
+        private const float MouseForce = -1500f;
+        private const float MouseRadius = 150f;
+        private const int ParticlesToSpawn = 5;
 
         // GPU Buffers
         private readonly ReadWriteBuffer<Float2> posBuffer;
         private readonly ReadWriteBuffer<Float2> velBuffer;
         private readonly ReadWriteBuffer<Float2> accBuffer;
+        private readonly ReadWriteBuffer<float> densityBuffer; 
         
         private readonly ReadWriteBuffer<int> gridHeadsBuffer;
         private readonly ReadWriteBuffer<int> nextParticleBuffer;
 
         // CPU arrays for rendering
         private readonly Float2[] cpuPos;
+        private readonly float[] cpuDensity; 
         
         private readonly int screenWidth;
         private readonly int screenHeight;
         
-        // Raylib RenderTexture for GPU-accelerated drawing
         private RenderTexture2D targetTexture;
-        
-        private const float ParticleMass = 5f;
-        private const float CollisionRadius = 10f;
-        private const float RepulsionForce = 2000f;
-        private const float DampingFactor = 10f;
-
-        private const float PhysikHzRate = 100.0f;
-
-        private const int GridCellSize = 10;
         private int gridCols;
         private int gridRows;
 
@@ -68,21 +70,23 @@ namespace FluidSimulation
             screenWidth = Raylib.GetScreenWidth();
             screenHeight = Raylib.GetScreenHeight();
 
-            gridCols = (screenWidth / GridCellSize) + 1; 
-            gridRows = (screenHeight / GridCellSize) + 1;
+            // Setup Grid
+            gridCols = (int)(screenWidth / GridCellSize) + 2; 
+            gridRows = (int)(screenHeight / GridCellSize) + 2;
 
             GraphicsDevice device = GraphicsDevice.GetDefault();
             
             posBuffer = device.AllocateReadWriteBuffer<Float2>(MaxParticles);
             velBuffer = device.AllocateReadWriteBuffer<Float2>(MaxParticles);
             accBuffer = device.AllocateReadWriteBuffer<Float2>(MaxParticles);
+            densityBuffer = device.AllocateReadWriteBuffer<float>(MaxParticles);
             
             gridHeadsBuffer = device.AllocateReadWriteBuffer<int>(gridCols * gridRows);
             nextParticleBuffer = device.AllocateReadWriteBuffer<int>(MaxParticles);
 
             cpuPos = new Float2[MaxParticles];
+            cpuDensity = new float[MaxParticles];
             
-            // GPU-accelerated render target
             targetTexture = Raylib.LoadRenderTexture(screenWidth, screenHeight);
 
             InitializeParticles(screenWidth, screenHeight);
@@ -93,25 +97,34 @@ namespace FluidSimulation
             var rand = new Random();
             Float2[] initPos = new Float2[InitialCount];
             Float2[] initVel = new Float2[InitialCount];
+            float[] initDensity = new float[InitialCount];
+
+            int cols = (int)Math.Sqrt(InitialCount * 2); 
+            float spacing = SmoothingRadius * 0.4f;
 
             for (int i = 0; i < InitialCount; i++)
             {
-                initPos[i] = new Float2(
-                    rand.Next(width / 2 - 100, width / 2 + 100),
-                    rand.Next(height / 2 - 100, height / 2 + 100)
-                );
+                float x = (width / 2 - (cols * spacing)/2) + (i % cols) * spacing;
+                float y = (height / 2 - (cols * spacing)/2) + (i / cols) * spacing;
+                
+                x += (float)(rand.NextDouble() * 2.0 - 1.0);
+                y += (float)(rand.NextDouble() * 2.0 - 1.0);
+
+                initPos[i] = new Float2(x, y);
+                initVel[i] = new Float2(0, 0);
+                initDensity[i] = RestDensity; 
             }
 
             posBuffer.CopyFrom(initPos, 0, 0, InitialCount);
             velBuffer.CopyFrom(initVel, 0, 0, InitialCount);
-            accBuffer.CopyFrom(initVel, 0, 0, InitialCount);
+            densityBuffer.CopyFrom(initDensity, 0, 0, InitialCount);
 
             particleCount = InitialCount;
         }
 
         public void Run()
         {
-            const float PhysicsStep = 1.0f / PhysikHzRate;
+            const float PhysicsStep = 0.001f; 
             double accumulator = 0.0;
             
             while (!Raylib.WindowShouldClose())
@@ -132,41 +145,43 @@ namespace FluidSimulation
                     accumulator -= PhysicsStep;
                 }
 
-                if (particleCount > 0)
-                {
-                    posBuffer.CopyTo(cpuPos, 0, 0, particleCount);
-                }
-
-                Raylib.BeginTextureMode(targetTexture);
-                Raylib.ClearBackground(Color.Black);
-
-                for (int i = 0; i < particleCount; i++)
-                {
-                    Raylib.DrawPixel((int)cpuPos[i].X, (int)cpuPos[i].Y, Color.SkyBlue);
-                }
-
-                Raylib.EndTextureMode();
-
-                Raylib.BeginDrawing();
-                Raylib.DrawTextureRec(
-                    targetTexture.Texture,
-                    new Rectangle(0, 0, screenWidth, -screenHeight),
-                    new Vector2(0, 0),
-                    Color.White
-                );
-
-               
-                Raylib.DrawRectangle(5, 5, 100, 25, new Color(0, 0, 0, 160));
-                Raylib.DrawText($"FPS: {Raylib.GetFPS()}", 5, 5, 20, Color.Lime);
-                Raylib.DrawText($"PhysSteps: {1.0f / PhysicsStep:F0} Hz", 5, 30, 10, Color.Gray);
-
-                string countText = $"Particles: {particleCount}";
-                Raylib.DrawRectangle(screenWidth - 160, 5, 150, 45, new Color(0, 0, 0, 160));
-                Raylib.DrawText(countText, screenWidth - 155, 10, 20, Color.White);
-
-                Raylib.EndDrawing();
+                Render();
             }
             Raylib.CloseWindow();
+        }
+
+        private void Render()
+        {
+            if (particleCount > 0)
+            {
+                posBuffer.CopyTo(cpuPos, 0, 0, particleCount);
+                densityBuffer.CopyTo(cpuDensity, 0, 0, particleCount);
+            }
+
+            Raylib.BeginTextureMode(targetTexture);
+            Raylib.ClearBackground(new Color(15, 15, 25, 255));
+
+            for (int i = 0; i < particleCount; i++)
+            {
+                float rho = cpuDensity[i];
+                float n = (rho - RestDensity) / RestDensity; 
+                
+                byte r = (byte)Math.Clamp(n * 255, 0, 255);
+                byte g = (byte)Math.Clamp(50 + n * 155, 50, 255);
+                byte b = 255;
+                
+                // Draw circle to represent particle volume
+                Raylib.DrawCircle((int)cpuPos[i].X, (int)cpuPos[i].Y, 3.0f, new Color(r, g, b, (byte)200));
+            }
+
+            Raylib.EndTextureMode();
+
+            Raylib.BeginDrawing();
+            Raylib.DrawTextureRec(targetTexture.Texture, new Rectangle(0, 0, screenWidth, -screenHeight), Vector2.Zero, Color.White);
+
+            Raylib.DrawFPS(10, 10);
+            Raylib.DrawText($"Particles: {particleCount}", 10, 30, 20, Color.White);
+            Raylib.EndDrawing();
         }
 
         private void UpdateSimulation(float deltaTime)
@@ -180,38 +195,49 @@ namespace FluidSimulation
 
             GraphicsDevice device = GraphicsDevice.GetDefault();
 
-            int totalGridCells = gridCols * gridRows;
-            device.For(totalGridCells, new ClearGridShaderOpt(gridHeadsBuffer));
-
-            device.For(particleCount, new BuildGridShaderOpt(
+            device.For(gridCols * gridRows, new ClearGridShader(gridHeadsBuffer));
+            device.For(particleCount, new BuildGridShader(
                 gridHeadsBuffer,
                 nextParticleBuffer,
                 posBuffer,
                 gridCols,
                 gridRows,
                 particleCount,
-                GridCellSize
+                (int)GridCellSize
             ));
 
-            device.For(particleCount, new CalculateForcesShaderOpt(
+            device.For(particleCount, new ComputeDensityShader(
+                posBuffer,
+                gridHeadsBuffer,
+                nextParticleBuffer,
+                densityBuffer,
+                gridCols,
+                gridRows,
+                particleCount,
+                (int)GridCellSize,
+                SmoothingRadius,
+                ParticleMass
+            ));
+
+            device.For(particleCount, new ComputeForcesShader(
                 accBuffer,
                 posBuffer,
                 velBuffer,
+                densityBuffer,
                 gridHeadsBuffer,
                 nextParticleBuffer,
                 gridCols,
                 gridRows,
                 particleCount,
-                GridCellSize,
+                (int)GridCellSize,
+                SmoothingRadius,
+                ParticleMass,
+                RestDensity,
+                Stiffness,
+                Viscosity,
+                GravityY,
                 screenWidth,
                 screenHeight,
-                WallMargin,
-                WallForce,
-                GravityY,
-                RepulsionForce,
-                DampingFactor,
-                CollisionRadius,
-                ParticleMass,
                 (currentMouseButtons & MouseButtons.Left) != 0 ? 1 : 0,
                 mousePosition.X,
                 mousePosition.Y,
@@ -219,14 +245,15 @@ namespace FluidSimulation
                 MouseForce
             ));
 
-            device.For(particleCount, new UpdateParticlesShaderOpt(
+            device.For(particleCount, new IntegrateShader(
                 posBuffer,
                 velBuffer,
                 accBuffer,
                 particleCount,
                 deltaTime,
                 screenWidth,
-                screenHeight
+                screenHeight,
+                WallDamping
             ));
         }
 
@@ -234,34 +261,31 @@ namespace FluidSimulation
         {
             if (particleCount >= MaxParticles) return;
             var rand = new Random();
-            
-            int countBefore = particleCount;
             int actualSpawn = 0;
-
+            
             Float2[] newPos = new Float2[ParticlesToSpawn];
             Float2[] newVel = new Float2[ParticlesToSpawn];
+            float[] newDensity = new float[ParticlesToSpawn];
 
             for (int k = 0; k < ParticlesToSpawn; k++) 
             {
-                if (particleCount >= MaxParticles) break;
-
+                if (particleCount + actualSpawn >= MaxParticles) break;
+                
                 newPos[actualSpawn] = new Float2(
-                    mousePosition.X + rand.Next(-10, 10),
-                    mousePosition.Y + rand.Next(-10, 10)
+                    mousePosition.X + (float)rand.NextDouble() * 10 - 5,
+                    mousePosition.Y + (float)rand.NextDouble() * 10 - 5
                 );
-                newVel[actualSpawn] = new Float2(0, 50);
-
-                particleCount++;
+                newVel[actualSpawn] = new Float2((float)rand.NextDouble() * 20 - 10, 50);
+                newDensity[actualSpawn] = RestDensity;
                 actualSpawn++;
             }
 
             if (actualSpawn > 0)
             {
-                posBuffer.CopyFrom(newPos, 0, countBefore, actualSpawn);
-                velBuffer.CopyFrom(newVel, 0, countBefore, actualSpawn);
-                
-                Float2[] zeros = new Float2[actualSpawn];
-                accBuffer.CopyFrom(zeros, 0, countBefore, actualSpawn);
+                posBuffer.CopyFrom(newPos, 0, particleCount, actualSpawn);
+                velBuffer.CopyFrom(newVel, 0, particleCount, actualSpawn);
+                densityBuffer.CopyFrom(newDensity, 0, particleCount, actualSpawn);
+                particleCount += actualSpawn;
             }
         }
 
@@ -270,6 +294,7 @@ namespace FluidSimulation
             posBuffer.Dispose();
             velBuffer.Dispose();
             accBuffer.Dispose();
+            densityBuffer.Dispose();
             gridHeadsBuffer.Dispose();
             nextParticleBuffer.Dispose();
             Raylib.UnloadRenderTexture(targetTexture);
@@ -277,304 +302,301 @@ namespace FluidSimulation
 
         [Flags] private enum MouseButtons { None = 0, Left = 1, Right = 2 }
     }
-}
 
-//256 for my RX 7900 XTX
-[ComputeSharp.GeneratedComputeShaderDescriptor]
-[ComputeSharp.ThreadGroupSize(16, 1, 1)]
-public readonly partial struct ClearGridShaderOpt : IComputeShader
-{
-    public readonly ReadWriteBuffer<int> gridHeads;
+    // --- Shaders ---
 
-    public ClearGridShaderOpt(ReadWriteBuffer<int> gridHeads)
+    [ComputeSharp.GeneratedComputeShaderDescriptor]
+    [ComputeSharp.ThreadGroupSize(64, 1, 1)]
+    public readonly partial struct ClearGridShader : IComputeShader
     {
-        this.gridHeads = gridHeads;
+        public readonly ReadWriteBuffer<int> gridHeads;
+        public ClearGridShader(ReadWriteBuffer<int> gridHeads) => this.gridHeads = gridHeads;
+        public void Execute() => gridHeads[ThreadIds.X] = -1;
     }
 
-    public void Execute()
+    [ComputeSharp.GeneratedComputeShaderDescriptor]
+    [ComputeSharp.ThreadGroupSize(64, 1, 1)]
+    public readonly partial struct BuildGridShader : IComputeShader
     {
-        gridHeads[ThreadIds.X] = -1;
-    }
-}
+        public readonly ReadWriteBuffer<int> gridHeads;
+        public readonly ReadWriteBuffer<int> nextParticle;
+        public readonly ReadWriteBuffer<Float2> pos;
+        public readonly int gridCols, gridRows, particleCount, gridCellSize;
 
-
-[ComputeSharp.GeneratedComputeShaderDescriptor]
-[ComputeSharp.ThreadGroupSize(16, 1, 1)]
-public readonly partial struct BuildGridShaderOpt : IComputeShader
-{
-    public readonly ReadWriteBuffer<int> gridHeads;
-    public readonly ReadWriteBuffer<int> nextParticle;
-    public readonly ReadWriteBuffer<Float2> pos;
-    public readonly int gridCols;
-    public readonly int gridRows;
-    public readonly int particleCount;
-    public readonly int gridCellSize;
-
-    public BuildGridShaderOpt(
-        ReadWriteBuffer<int> gridHeads,
-        ReadWriteBuffer<int> nextParticle,
-        ReadWriteBuffer<Float2> pos,
-        int gridCols,
-        int gridRows,
-        int particleCount,
-        int gridCellSize)
-    {
-        this.gridHeads = gridHeads;
-        this.nextParticle = nextParticle;
-        this.pos = pos;
-        this.gridCols = gridCols;
-        this.gridRows = gridRows;
-        this.particleCount = particleCount;
-        this.gridCellSize = gridCellSize;
-    }
-
-    public void Execute()
-    {
-        int i = ThreadIds.X;
-        if (i >= particleCount) return;
-
-        Float2 p = pos[i];
-        int cx = (int)(p.X / gridCellSize);
-        int cy = (int)(p.Y / gridCellSize);
-
-        if (cx < 0) cx = 0; else if (cx >= gridCols) cx = gridCols - 1;
-        if (cy < 0) cy = 0; else if (cy >= gridRows) cy = gridRows - 1;
-
-        int cellIndex = cy * gridCols + cx;
-
-        int originalHead;
-        Hlsl.InterlockedExchange(ref gridHeads[cellIndex], i, out originalHead);
-        nextParticle[i] = originalHead;
-    }
-}
-
-
-[ComputeSharp.GeneratedComputeShaderDescriptor]
-[ComputeSharp.ThreadGroupSize(16, 1, 1)]
-public readonly partial struct CalculateForcesShaderOpt : IComputeShader
-{
-    public readonly ReadWriteBuffer<Float2> acc;
-    public readonly ReadWriteBuffer<Float2> pos;
-    public readonly ReadWriteBuffer<Float2> vel;
-    public readonly ReadWriteBuffer<int> gridHeads;
-    public readonly ReadWriteBuffer<int> nextParticle;
-
-    public readonly int gridCols;
-    public readonly int gridRows;
-    public readonly int particleCount;
-    public readonly int gridCellSize;
-    public readonly int width;
-    public readonly int height;
-
-    public readonly float wallMargin;
-    public readonly float wallForce;
-    public readonly float gravityY;
-    public readonly float repulsionForce;
-    public readonly float dampingFactor;
-    public readonly float collisionRadius;
-    public readonly float particleMass;
-
-    public readonly int isMouseLeftDown;
-    public readonly float mouseX;
-    public readonly float mouseY;
-    public readonly float mouseRadius;
-    public readonly float mouseForce;
-
-    public CalculateForcesShaderOpt(
-        ReadWriteBuffer<Float2> acc,
-        ReadWriteBuffer<Float2> pos,
-        ReadWriteBuffer<Float2> vel,
-        ReadWriteBuffer<int> gridHeads,
-        ReadWriteBuffer<int> nextParticle,
-        int gridCols,
-        int gridRows,
-        int particleCount,
-        int gridCellSize,
-        int width,
-        int height,
-        float wallMargin,
-        float wallForce,
-        float gravityY,
-        float repulsionForce,
-        float dampingFactor,
-        float collisionRadius,
-        float particleMass,
-        int isMouseLeftDown,
-        float mouseX,
-        float mouseY,
-        float mouseRadius,
-        float mouseForce)
-    {
-        this.acc = acc;
-        this.pos = pos;
-        this.vel = vel;
-        this.gridHeads = gridHeads;
-        this.nextParticle = nextParticle;
-        this.gridCols = gridCols;
-        this.gridRows = gridRows;
-        this.particleCount = particleCount;
-        this.gridCellSize = gridCellSize;
-        this.width = width;
-        this.height = height;
-        this.wallMargin = wallMargin;
-        this.wallForce = wallForce;
-        this.gravityY = gravityY;
-        this.repulsionForce = repulsionForce;
-        this.dampingFactor = dampingFactor;
-        this.collisionRadius = collisionRadius;
-        this.particleMass = particleMass;
-        this.isMouseLeftDown = isMouseLeftDown;
-        this.mouseX = mouseX;
-        this.mouseY = mouseY;
-        this.mouseRadius = mouseRadius;
-        this.mouseForce = mouseForce;
-    }
-
-    public void Execute()
-    {
-        int i = ThreadIds.X;
-        if (i >= particleCount) return;
-
-        float forceX = 0;
-        float forceY = 0;
-
-        Float2 myPos = pos[i];
-        Float2 myVel = vel[i];
-        float myX = myPos.X;
-        float myY = myPos.Y;
-
-        if (myX < wallMargin) forceX += (wallMargin - myX) * wallForce;
-        else if (myX > width - wallMargin) forceX -= (myX - (width - wallMargin)) * wallForce;
-
-        if (myY < wallMargin) forceY += (wallMargin - myY) * wallForce;
-        else if (myY > height - wallMargin) forceY -= (myY - (height - wallMargin)) * wallForce;
-
-        int cx = (int)(myX / gridCellSize);
-        int cy = (int)(myY / gridCellSize);
-
-        if (cx < 0) cx = 0; else if (cx >= gridCols) cx = gridCols - 1;
-        if (cy < 0) cy = 0; else if (cy >= gridRows) cy = gridRows - 1;
-
-        int startX = cx > 0 ? cx - 1 : 0;
-        int endX = cx < gridCols - 1 ? cx + 1 : gridCols - 1;
-        int startY = cy > 0 ? cy - 1 : 0;
-        int endY = cy < gridRows - 1 ? cy + 1 : gridRows - 1;
-
-        float collisionRadiusSqr = collisionRadius * collisionRadius;
-
-        for (int y = startY; y <= endY; y++)
+        public BuildGridShader(ReadWriteBuffer<int> gridHeads, ReadWriteBuffer<int> nextParticle, ReadWriteBuffer<Float2> pos, int gridCols, int gridRows, int particleCount, int gridCellSize)
         {
-            int rowOffset = y * gridCols;
-            for (int x = startX; x <= endX; x++)
+            this.gridHeads = gridHeads; this.nextParticle = nextParticle; this.pos = pos;
+            this.gridCols = gridCols; this.gridRows = gridRows; this.particleCount = particleCount; this.gridCellSize = gridCellSize;
+        }
+
+        public void Execute()
+        {
+            int i = ThreadIds.X;
+            if (i >= particleCount) return;
+
+            Float2 p = pos[i];
+            int cx = (int)(p.X / gridCellSize);
+            int cy = (int)(p.Y / gridCellSize);
+            // Clamp to grid
+            cx = Hlsl.Clamp(cx, 0, gridCols - 1);
+            cy = Hlsl.Clamp(cy, 0, gridRows - 1);
+
+            int cellIndex = cy * gridCols + cx;
+            int originalHead;
+            Hlsl.InterlockedExchange(ref gridHeads[cellIndex], i, out originalHead);
+            nextParticle[i] = originalHead;
+        }
+    }
+
+    [ComputeSharp.GeneratedComputeShaderDescriptor]
+    [ComputeSharp.ThreadGroupSize(64, 1, 1)]
+    public readonly partial struct ComputeDensityShader : IComputeShader
+    {
+        public readonly ReadWriteBuffer<Float2> pos;
+        public readonly ReadWriteBuffer<int> gridHeads;
+        public readonly ReadWriteBuffer<int> nextParticle;
+        public readonly ReadWriteBuffer<float> density;
+        
+        public readonly int gridCols, gridRows, particleCount, gridCellSize;
+        public readonly float h; // Smoothing Radius
+        public readonly float mass;
+
+        public ComputeDensityShader(ReadWriteBuffer<Float2> pos, ReadWriteBuffer<int> gridHeads, ReadWriteBuffer<int> nextParticle, ReadWriteBuffer<float> density, int gridCols, int gridRows, int particleCount, int gridCellSize, float h, float mass)
+        {
+            this.pos = pos; this.gridHeads = gridHeads; this.nextParticle = nextParticle; this.density = density;
+            this.gridCols = gridCols; this.gridRows = gridRows; this.particleCount = particleCount; this.gridCellSize = gridCellSize;
+            this.h = h; this.mass = mass;
+        }
+
+        public void Execute()
+        {
+            int i = ThreadIds.X;
+            if (i >= particleCount) return;
+
+            Float2 p = pos[i];
+            float rho = 0f;
+
+            // Poly6 Kernel (2D): 4 / (pi * h^8)
+            float poly6Const = 4f / (3.14159f * Hlsl.Pow(h, 8));
+            float h2 = h * h;
+
+            int cx = (int)(p.X / gridCellSize);
+            int cy = (int)(p.Y / gridCellSize);
+
+            for (int y = cy - 1; y <= cy + 1; y++)
             {
-                int cellIndex = rowOffset + x;
-                int neighborIdx = gridHeads[cellIndex];
-
-                while (neighborIdx != -1)
+                if (y < 0 || y >= gridRows) continue;
+                for (int x = cx - 1; x <= cx + 1; x++)
                 {
-                    if (i != neighborIdx)
+                    if (x < 0 || x >= gridCols) continue;
+                    
+                    int neighborIdx = gridHeads[y * gridCols + x];
+                    while (neighborIdx != -1)
                     {
-                        Float2 neighborPos = pos[neighborIdx];
-                        float offX = myX - neighborPos.X;
-                        float offY = myY - neighborPos.Y;
+                        Float2 np = pos[neighborIdx];
+                        float dx = p.X - np.X;
+                        float dy = p.Y - np.Y;
+                        float r2 = dx * dx + dy * dy;
 
-                        float distSqr = offX * offX + offY * offY;
-                        if (distSqr < collisionRadiusSqr && distSqr > 0.0001f)
+                        if (r2 < h2)
                         {
-                            float distance = Hlsl.Sqrt(distSqr);
-                            float factor = (collisionRadius - distance) / distance * repulsionForce;
-
-                            forceX += offX * factor;
-                            forceY += offY * factor;
-
-                            Float2 neighborVel = vel[neighborIdx];
-                            float relVelX = neighborVel.X - myVel.X;
-                            float relVelY = neighborVel.Y - myVel.Y;
-                            forceX += relVelX * dampingFactor;
-                            forceY += relVelY * dampingFactor;
+                            float term = h2 - r2;
+                            rho += term * term * term;
                         }
+                        neighborIdx = nextParticle[neighborIdx];
                     }
-                    neighborIdx = nextParticle[neighborIdx];
                 }
             }
+
+            rho *= poly6Const * mass;
+            if (rho < 0.0001f) rho = 0.0001f; 
+            density[i] = rho;
         }
+    }
 
-        float accX = forceX / particleMass;
-        float accY = gravityY + (forceY / particleMass);
+    [ComputeSharp.GeneratedComputeShaderDescriptor]
+    [ComputeSharp.ThreadGroupSize(64, 1, 1)]
+    public readonly partial struct ComputeForcesShader : IComputeShader
+    {
+        public readonly ReadWriteBuffer<Float2> acc;
+        public readonly ReadWriteBuffer<Float2> pos;
+        public readonly ReadWriteBuffer<Float2> vel;
+        public readonly ReadWriteBuffer<float> density;
+        public readonly ReadWriteBuffer<int> gridHeads;
+        public readonly ReadWriteBuffer<int> nextParticle;
 
-        if (isMouseLeftDown == 1)
+        public readonly int gridCols, gridRows, particleCount, gridCellSize;
+        public readonly float h, mass, restDensity, stiffness, viscosity, gravityY;
+        public readonly int screenWidth, screenHeight;
+        public readonly int isMouseLeftDown;
+        public readonly float mouseX, mouseY, mouseRadius, mouseForce;
+
+        public ComputeForcesShader(ReadWriteBuffer<Float2> acc, ReadWriteBuffer<Float2> pos, ReadWriteBuffer<Float2> vel, ReadWriteBuffer<float> density, ReadWriteBuffer<int> gridHeads, ReadWriteBuffer<int> nextParticle, int gridCols, int gridRows, int particleCount, int gridCellSize, float h, float mass, float restDensity, float stiffness, float viscosity, float gravityY, int screenWidth, int screenHeight, int isMouseLeftDown, float mouseX, float mouseY, float mouseRadius, float mouseForce)
         {
-            float tmX = mouseX - myX;
-            float tmY = mouseY - myY;
-            float dSq = tmX * tmX + tmY * tmY;
-            if (dSq < mouseRadius * mouseRadius)
-            {
-                float dist = Hlsl.Sqrt(dSq);
-                float f = mouseForce / (dist + 1f);
-                accX += tmX * f;
-                accY += tmY * f;
-            }
+            this.acc = acc; this.pos = pos; this.vel = vel; this.density = density; this.gridHeads = gridHeads; this.nextParticle = nextParticle;
+            this.gridCols = gridCols; this.gridRows = gridRows; this.particleCount = particleCount; this.gridCellSize = gridCellSize;
+            this.h = h; this.mass = mass; this.restDensity = restDensity; this.stiffness = stiffness; this.viscosity = viscosity; this.gravityY = gravityY;
+            this.screenWidth = screenWidth; this.screenHeight = screenHeight;
+            this.isMouseLeftDown = isMouseLeftDown; this.mouseX = mouseX; this.mouseY = mouseY; this.mouseRadius = mouseRadius; this.mouseForce = mouseForce;
         }
 
-        acc[i] = new Float2(accX, accY);
+        public void Execute()
+        {
+            int i = ThreadIds.X;
+            if (i >= particleCount) return;
+
+            Float2 p = pos[i];
+            Float2 v = vel[i];
+            float rho = density[i];
+            
+            // Pressure calculation with Clamping
+            float pressure = stiffness * (rho - restDensity);
+            if (pressure < 0) pressure = 0; 
+
+            Float2 force = new Float2(0, 0);
+
+            // Spiky Kernel Gradient Constant (2D): -30 / (pi * h^5)
+            float spikyGradConst = -30f / (3.14159f * Hlsl.Pow(h, 5));
+            
+            // Viscosity Laplacian Constant (2D): 40 / (pi * h^5)
+            float viscLapConst = 40f / (3.14159f * Hlsl.Pow(h, 5));
+            
+            float h2 = h * h;
+
+            int cx = (int)(p.X / gridCellSize);
+            int cy = (int)(p.Y / gridCellSize);
+
+            for (int y = cy - 1; y <= cy + 1; y++)
+            {
+                if (y < 0 || y >= gridRows) continue;
+                for (int x = cx - 1; x <= cx + 1; x++)
+                {
+                    if (x < 0 || x >= gridCols) continue;
+
+                    int neighborIdx = gridHeads[y * gridCols + x];
+                    while (neighborIdx != -1)
+                    {
+                        if (i != neighborIdx)
+                        {
+                            Float2 np = pos[neighborIdx];
+                            float dx = p.X - np.X;
+                            float dy = p.Y - np.Y;
+                            float r2 = dx * dx + dy * dy;
+
+                            if (r2 < h2 && r2 > 0.00001f)
+                            {
+                                float r = Hlsl.Sqrt(r2);
+                                float h_r = h - r;
+                                
+                                float neighborRho = density[neighborIdx];
+                                float neighborPressure = stiffness * (neighborRho - restDensity);
+                                if (neighborPressure < 0) neighborPressure = 0;
+
+                                // Pressure Force (Symmetric)
+                                float pTerm = (pressure / (rho * rho)) + (neighborPressure / (neighborRho * neighborRho));
+                                float gradMag = spikyGradConst * h_r * h_r; // (h-r)^2
+                                
+                                Float2 gradW = new Float2(dx / r * gradMag, dy / r * gradMag);
+                                
+                                force.X -= mass * pTerm * gradW.X;
+                                force.Y -= mass * pTerm * gradW.Y;
+
+                                // Near-field repulsion (Anti-Clumping)
+                                if (r < h * 0.2f)
+                                {
+                                     float repulsion = 500000.0f * (1.0f - r / (h * 0.2f));
+                                     force.X += (dx / r) * repulsion;
+                                     force.Y += (dy / r) * repulsion;
+                                }
+
+                                // Viscosity Force
+                                Float2 nv = vel[neighborIdx];
+                                float laplacian = viscLapConst * h_r; // (h-r)
+                                
+                                float viscTerm = viscosity * mass / (neighborRho * rho); 
+                                force.X += viscTerm * laplacian * (nv.X - v.X);
+                                force.Y += viscTerm * laplacian * (nv.Y - v.Y);
+                            }
+                        }
+                        neighborIdx = nextParticle[neighborIdx];
+                    }
+                }
+            }
+
+            // Mouse Interaction
+            if (isMouseLeftDown == 1)
+            {
+                float dx = mouseX - p.X;
+                float dy = mouseY - p.Y;
+                float d2 = dx * dx + dy * dy;
+                if (d2 < mouseRadius * mouseRadius && d2 > 0.001f)
+                {
+                    float d = Hlsl.Sqrt(d2);
+                    float f = mouseForce * (1.0f - d / mouseRadius);
+                    // Reduced multiplier from 500f to 50f to prevent explosion
+                    force.X += (dx / d) * f * 50f; 
+                    force.Y += (dy / d) * f * 50f;
+                }
+            }
+
+            acc[i] = new Float2(force.X, gravityY + force.Y);
+        }
     }
-}
 
-
-[ComputeSharp.GeneratedComputeShaderDescriptor]
-[ComputeSharp.ThreadGroupSize(16, 1, 1)]
-public readonly partial struct UpdateParticlesShaderOpt : IComputeShader
-{
-    public readonly ReadWriteBuffer<Float2> pos;
-    public readonly ReadWriteBuffer<Float2> vel;
-    public readonly ReadWriteBuffer<Float2> acc;
-    
-    public readonly int particleCount;
-    public readonly float deltaTime;
-    public readonly int width;
-    public readonly int height;
-
-    public UpdateParticlesShaderOpt(
-        ReadWriteBuffer<Float2> pos,
-        ReadWriteBuffer<Float2> vel,
-        ReadWriteBuffer<Float2> acc,
-        int particleCount,
-        float deltaTime,
-        int width,
-        int height)
+    [ComputeSharp.GeneratedComputeShaderDescriptor]
+    [ComputeSharp.ThreadGroupSize(64, 1, 1)]
+    public readonly partial struct IntegrateShader : IComputeShader
     {
-        this.pos = pos;
-        this.vel = vel;
-        this.acc = acc;
-        this.particleCount = particleCount;
-        this.deltaTime = deltaTime;
-        this.width = width;
-        this.height = height;
-    }
-    
-    public void Execute()
-    {
-        int i = ThreadIds.X;
-        if (i >= particleCount) return;
+        public readonly ReadWriteBuffer<Float2> pos;
+        public readonly ReadWriteBuffer<Float2> vel;
+        public readonly ReadWriteBuffer<Float2> acc;
+        
+        public readonly int particleCount;
+        public readonly float deltaTime;
+        public readonly int width;
+        public readonly int height;
+        public readonly float wallDamping;
 
-        const float boundaryFriction = 0.5f;
-        const float bounce = -0.2f;
+        public IntegrateShader(ReadWriteBuffer<Float2> pos, ReadWriteBuffer<Float2> vel, ReadWriteBuffer<Float2> acc, int particleCount, float deltaTime, int width, int height, float wallDamping)
+        {
+            this.pos = pos; this.vel = vel; this.acc = acc;
+            this.particleCount = particleCount; this.deltaTime = deltaTime; this.width = width; this.height = height; this.wallDamping = wallDamping;
+        }
+        
+        public void Execute()
+        {
+            int i = ThreadIds.X;
+            if (i >= particleCount) return;
 
-        Float2 v = vel[i];
-        Float2 a = acc[i];
-        Float2 p = pos[i];
+            Float2 p = pos[i];
+            Float2 v = vel[i];
+            Float2 a = acc[i];
 
-        v.X += a.X * deltaTime;
-        v.Y += a.Y * deltaTime;
-        p.X += v.X * deltaTime;
-        p.Y += v.Y * deltaTime;
+            // Simple Euler Integration with Speed Limit
+            v.X += a.X * deltaTime;
+            v.Y += a.Y * deltaTime;
+            
+            // Clamp velocity to prevent explosions (e.g., max 2000 px/s)
+            float vSq = v.X * v.X + v.Y * v.Y;
+            if (vSq > 4000000.0f) // 2000^2
+            {
+                float len = Hlsl.Sqrt(vSq);
+                v.X = (v.X / len) * 2000.0f;
+                v.Y = (v.Y / len) * 2000.0f;
+            }
 
-        if (p.X < 0) { p.X = 0; v.X *= bounce; }
-        if (p.Y < 0) { p.Y = 0; v.Y *= bounce; }
-        if (p.X > width) { p.X = width; v.X *= bounce; }
-        if (p.Y > height) { p.Y = height; v.Y *= bounce; v.X *= boundaryFriction; }
+            p.X += v.X * deltaTime;
+            p.Y += v.Y * deltaTime;
 
-        vel[i] = v;
-        pos[i] = p;
+            // Wall Collisions
+            const float margin = 5.0f;
+            if (p.X < margin) { p.X = margin; v.X *= wallDamping; }
+            if (p.X > width - margin) { p.X = width - margin; v.X *= wallDamping; }
+            if (p.Y < margin) { p.Y = margin; v.Y *= wallDamping; }
+            if (p.Y > height - margin) { p.Y = height - margin; v.Y *= wallDamping; }
+
+            vel[i] = v;
+            pos[i] = p;
+        }
     }
 }
