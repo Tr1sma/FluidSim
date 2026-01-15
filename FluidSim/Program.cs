@@ -19,16 +19,16 @@ namespace FluidSimulation
 
     public class Simulation : IDisposable
     {
-        private const int MaxParticles = 7000; //bis 7000 für Arbeit und bis 150000 für privat
+        private const int MaxParticles = 10000; //bis 7000 für Arbeit und bis 150000 für privat
         private int particleCount = 0;
-        private const int InitialCount = 500;
+        private const int InitialCount = 1500;
 
-        private const float MouseForce = -1500f;
+        private const float MouseForce = -2500f;
         private const float MouseRadius = 100f;
         private const int ParticlesToSpawn = 10;
 
-        private const float WallMargin = 20;
-        private const float WallForce = 200f + GravityY;
+        private const float WallMargin = 3;
+        private const float WallForce = 2000f + GravityY;
 
         private const float GravityY = 9.81f * 100f;
 
@@ -56,7 +56,7 @@ namespace FluidSimulation
 
         private const float PhysikHzRate = 100.0f;
 
-        private const int GridCellSize = 12;
+        private const int GridCellSize = 10;
         private int gridCols;
         private int gridRows;
 

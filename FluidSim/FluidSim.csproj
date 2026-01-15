@@ -6,8 +6,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-	 <PublishAot>true</PublishAot>
-	 <OutputType>WinExe</OutputType>
+	<PublishAot>true</PublishAot>
+	<OutputType>WinExe</OutputType>
   </PropertyGroup>
 
   <ItemGroup>
