@@ -9,7 +9,7 @@ namespace FluidSimulation
     {
         public static void Main()
         {
-            Raylib.InitWindow(1920, 1080, "Fluid Simulation");
+            Raylib.InitWindow(800, 450, "Fluid Simulation");
             Raylib.SetTargetFPS(9999); 
 
             using var sim = new Simulation();
@@ -21,10 +21,12 @@ namespace FluidSimulation
     {
         private const int MaxParticles = 150000; 
         private int particleCount = 0;
-        private const int InitialCount = 1500;
+        private const int InitialCount = 500;
 
         private const float MouseForce = -1000f;
         private const float MouseRadius = 100f;
+        private const int ParticlesToSpawn = 10;
+
         private const float WallMargin = 20;
         private const float WallForce = 200f + GravityY;
 
@@ -52,7 +54,7 @@ namespace FluidSimulation
         private const float RepulsionForce = 2000f;
         private const float DampingFactor = 10f;
 
-        private const float PhysikHzRate = 500.0f;
+        private const float PhysikHzRate = 100.0f;
 
         private const int GridCellSize = 12;
         private int gridCols;
@@ -130,13 +132,11 @@ namespace FluidSimulation
                     accumulator -= PhysicsStep;
                 }
 
-                // Retrieve data for rendering
                 if (particleCount > 0)
                 {
                     posBuffer.CopyTo(cpuPos, 0, 0, particleCount);
                 }
 
-                // Draw particles to render texture (GPU-accelerated)
                 Raylib.BeginTextureMode(targetTexture);
                 Raylib.ClearBackground(Color.Black);
                 
@@ -147,7 +147,6 @@ namespace FluidSimulation
                 
                 Raylib.EndTextureMode();
 
-                // Draw render texture to screen (flipped because OpenGL)
                 Raylib.BeginDrawing();
                 Raylib.DrawTextureRec(
                     targetTexture.Texture,
@@ -156,7 +155,7 @@ namespace FluidSimulation
                     Color.White
                 );
 
-                // UI overlay
+               
                 Raylib.DrawRectangle(5, 5, 100, 25, new Color(0, 0, 0, 160));
                 Raylib.DrawText($"FPS: {Raylib.GetFPS()}", 5, 5, 20, Color.Lime);
                 Raylib.DrawText($"PhysSteps: {1.0f / PhysicsStep:F0} Hz", 5, 30, 10, Color.Gray);
@@ -236,14 +235,13 @@ namespace FluidSimulation
             if (particleCount >= MaxParticles) return;
             var rand = new Random();
             
-            int particlesToSpawn = 15;
             int countBefore = particleCount;
             int actualSpawn = 0;
 
-            Float2[] newPos = new Float2[particlesToSpawn];
-            Float2[] newVel = new Float2[particlesToSpawn];
+            Float2[] newPos = new Float2[ParticlesToSpawn];
+            Float2[] newVel = new Float2[ParticlesToSpawn];
 
-            for (int k = 0; k < particlesToSpawn; k++) 
+            for (int k = 0; k < ParticlesToSpawn; k++) 
             {
                 if (particleCount >= MaxParticles) break;
 
@@ -281,10 +279,9 @@ namespace FluidSimulation
     }
 }
 
-// ===== PHYSICS SHADERS =====
-
+//256 for my RX 7900 XTX
 [ComputeSharp.GeneratedComputeShaderDescriptor]
-[ComputeSharp.ThreadGroupSize(256, 1, 1)]
+[ComputeSharp.ThreadGroupSize(64, 1, 1)]
 public readonly partial struct ClearGridShaderOpt : IComputeShader
 {
     public readonly ReadWriteBuffer<int> gridHeads;
@@ -302,7 +299,7 @@ public readonly partial struct ClearGridShaderOpt : IComputeShader
 
 
 [ComputeSharp.GeneratedComputeShaderDescriptor]
-[ComputeSharp.ThreadGroupSize(256, 1, 1)]
+[ComputeSharp.ThreadGroupSize(64, 1, 1)]
 public readonly partial struct BuildGridShaderOpt : IComputeShader
 {
     public readonly ReadWriteBuffer<int> gridHeads;
@@ -353,7 +350,7 @@ public readonly partial struct BuildGridShaderOpt : IComputeShader
 
 
 [ComputeSharp.GeneratedComputeShaderDescriptor]
-[ComputeSharp.ThreadGroupSize(256, 1, 1)]
+[ComputeSharp.ThreadGroupSize(64, 1, 1)]
 public readonly partial struct CalculateForcesShaderOpt : IComputeShader
 {
     public readonly ReadWriteBuffer<Float2> acc;
@@ -525,7 +522,7 @@ public readonly partial struct CalculateForcesShaderOpt : IComputeShader
 
 
 [ComputeSharp.GeneratedComputeShaderDescriptor]
-[ComputeSharp.ThreadGroupSize(256, 1, 1)]
+[ComputeSharp.ThreadGroupSize(64, 1, 1)]
 public readonly partial struct UpdateParticlesShaderOpt : IComputeShader
 {
     public readonly ReadWriteBuffer<Float2> pos;
