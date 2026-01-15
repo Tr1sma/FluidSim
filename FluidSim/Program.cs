@@ -281,7 +281,7 @@ namespace FluidSimulation
 
 //256 for my RX 7900 XTX
 [ComputeSharp.GeneratedComputeShaderDescriptor]
-[ComputeSharp.ThreadGroupSize(64, 1, 1)]
+[ComputeSharp.ThreadGroupSize(16, 1, 1)]
 public readonly partial struct ClearGridShaderOpt : IComputeShader
 {
     public readonly ReadWriteBuffer<int> gridHeads;
@@ -299,7 +299,7 @@ public readonly partial struct ClearGridShaderOpt : IComputeShader
 
 
 [ComputeSharp.GeneratedComputeShaderDescriptor]
-[ComputeSharp.ThreadGroupSize(64, 1, 1)]
+[ComputeSharp.ThreadGroupSize(16, 1, 1)]
 public readonly partial struct BuildGridShaderOpt : IComputeShader
 {
     public readonly ReadWriteBuffer<int> gridHeads;
@@ -350,7 +350,7 @@ public readonly partial struct BuildGridShaderOpt : IComputeShader
 
 
 [ComputeSharp.GeneratedComputeShaderDescriptor]
-[ComputeSharp.ThreadGroupSize(64, 1, 1)]
+[ComputeSharp.ThreadGroupSize(16, 1, 1)]
 public readonly partial struct CalculateForcesShaderOpt : IComputeShader
 {
     public readonly ReadWriteBuffer<Float2> acc;
@@ -522,7 +522,7 @@ public readonly partial struct CalculateForcesShaderOpt : IComputeShader
 
 
 [ComputeSharp.GeneratedComputeShaderDescriptor]
-[ComputeSharp.ThreadGroupSize(64, 1, 1)]
+[ComputeSharp.ThreadGroupSize(16, 1, 1)]
 public readonly partial struct UpdateParticlesShaderOpt : IComputeShader
 {
     public readonly ReadWriteBuffer<Float2> pos;
