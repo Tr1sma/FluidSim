@@ -19,20 +19,30 @@ namespace FluidSimulation
 
     public class Simulation : IDisposable
     {
-        private const int MaxParticles = 8000; 
+        private const int MaxParticles = 10000; // High resolution
         private int particleCount = 0;
-        private const int InitialFluidCount = 2000;
+        private const int InitialFluidCount = 4000;
 
         // SPH Constants
-        private const float SmoothingRadius = 24.0f; 
+        private const float SmoothingRadius = 20.0f; // Smaller radius for higher resolution
         private const float GridCellSize = SmoothingRadius; 
         private const float RestDensity = 1.0f; 
-        private const float Stiffness = 3500f; 
+        
+        // Tait EOS Parameters: B = 3500, Gamma = 7
+        private const float Stiffness = 5000f; 
         private const float TaitGamma = 7.0f;
-        private const float Viscosity = 250f; 
-        private const float ParticleMass = 25.0f; 
+
+        private const float Viscosity = 100f; 
+        private const float XSPH_Epsilon = 0.5f; 
+        
+        private const float ParticleMass = 15.0f; 
+        
+        // Surface Tension (Becker 2007 / Akinci)
+        private const float SurfaceTension = 1500f; 
+        private const float SurfaceThreshold = 7.0f; 
 
         private const float GravityY = 9.81f * 60f; 
+
         private const float WallDamping = -0.5f;
         
         private const float MouseForce = -1500f;
@@ -177,7 +187,7 @@ namespace FluidSimulation
 
         public void Run()
         {
-            const float PhysicsStep = 0.0008f; 
+            const float PhysicsStep = 0.0006f; 
             double accumulator = 0.0;
             
             while (!Raylib.WindowShouldClose())
@@ -213,14 +223,14 @@ namespace FluidSimulation
             }
 
             Raylib.BeginTextureMode(targetTexture);
-            Raylib.ClearBackground(new Color(15, 15, 25, 255));
+            Raylib.ClearBackground(new Color(10, 10, 15, 255));
 
             for (int i = 0; i < particleCount; i++)
             {
                 if (cpuType[i] == 1) // Boundary
                 {
-                     // Debug draw for boundary
-                     Raylib.DrawCircle((int)cpuPos[i].X, (int)cpuPos[i].Y, 2.0f, new Color(50, 50, 50, 255));
+                     // Invisible boundaries (or very faint)
+                     // Raylib.DrawCircle((int)cpuPos[i].X, (int)cpuPos[i].Y, 2.0f, new Color(30, 30, 30, 255));
                 }
                 else // Fluid
                 {
@@ -228,10 +238,10 @@ namespace FluidSimulation
                     float n = (rho - RestDensity) / RestDensity; 
                     
                     byte r = (byte)Math.Clamp(n * 255, 0, 255);
-                    byte g = (byte)Math.Clamp(50 + n * 155, 50, 255);
+                    byte g = (byte)Math.Clamp(100 + n * 155, 100, 255);
                     byte b = 255;
                     
-                    Raylib.DrawCircle((int)cpuPos[i].X, (int)cpuPos[i].Y, 3.5f, new Color(r, g, b, (byte)200));
+                    Raylib.DrawCircle((int)cpuPos[i].X, (int)cpuPos[i].Y, 3.0f, new Color(r, g, b, (byte)255));
                 }
             }
 
@@ -285,7 +295,7 @@ namespace FluidSimulation
                 posBuffer,
                 velBuffer,
                 densityBuffer,
-                typeBuffer, // Pass Type Buffer
+                typeBuffer, 
                 gridHeadsBuffer,
                 nextParticleBuffer,
                 gridCols,
@@ -305,7 +315,11 @@ namespace FluidSimulation
                 mousePosition.Y,
                 MouseRadius,
                 MouseForce,
-                TaitGamma
+                TaitGamma,
+                SurfaceTension,
+                SurfaceThreshold,
+                XSPH_Epsilon,
+                deltaTime
             ));
 
             device.For(particleCount, new IntegrateShader(
@@ -498,8 +512,12 @@ namespace FluidSimulation
         public readonly int isMouseLeftDown;
         public readonly float mouseX, mouseY, mouseRadius, mouseForce;
         public readonly float taitGamma;
+        public readonly float surfaceTension;
+        public readonly float surfaceThreshold;
+        public readonly float xsphEpsilon;
+        public readonly float deltaTime;
 
-        public ComputeForcesShader(ReadWriteBuffer<Float2> acc, ReadWriteBuffer<Float2> pos, ReadWriteBuffer<Float2> vel, ReadWriteBuffer<float> density, ReadWriteBuffer<int> type, ReadWriteBuffer<int> gridHeads, ReadWriteBuffer<int> nextParticle, int gridCols, int gridRows, int particleCount, int gridCellSize, float h, float mass, float restDensity, float stiffness, float viscosity, float gravityY, int screenWidth, int screenHeight, int isMouseLeftDown, float mouseX, float mouseY, float mouseRadius, float mouseForce, float taitGamma)
+        public ComputeForcesShader(ReadWriteBuffer<Float2> acc, ReadWriteBuffer<Float2> pos, ReadWriteBuffer<Float2> vel, ReadWriteBuffer<float> density, ReadWriteBuffer<int> type, ReadWriteBuffer<int> gridHeads, ReadWriteBuffer<int> nextParticle, int gridCols, int gridRows, int particleCount, int gridCellSize, float h, float mass, float restDensity, float stiffness, float viscosity, float gravityY, int screenWidth, int screenHeight, int isMouseLeftDown, float mouseX, float mouseY, float mouseRadius, float mouseForce, float taitGamma, float surfaceTension, float surfaceThreshold, float xsphEpsilon, float deltaTime)
         {
             this.acc = acc; this.pos = pos; this.vel = vel; this.density = density; this.type = type; this.gridHeads = gridHeads; this.nextParticle = nextParticle;
             this.gridCols = gridCols; this.gridRows = gridRows; this.particleCount = particleCount; this.gridCellSize = gridCellSize;
@@ -507,6 +525,10 @@ namespace FluidSimulation
             this.screenWidth = screenWidth; this.screenHeight = screenHeight;
             this.isMouseLeftDown = isMouseLeftDown; this.mouseX = mouseX; this.mouseY = mouseY; this.mouseRadius = mouseRadius; this.mouseForce = mouseForce;
             this.taitGamma = taitGamma;
+            this.surfaceTension = surfaceTension;
+            this.surfaceThreshold = surfaceThreshold;
+            this.xsphEpsilon = xsphEpsilon;
+            this.deltaTime = deltaTime;
         }
 
         public void Execute()
@@ -532,9 +554,13 @@ namespace FluidSimulation
             if (pressure < 0) pressure = 0; 
 
             Float2 force = new Float2(0, 0);
+            Float2 xsphVelCorrection = new Float2(0, 0); // XSPH Accumulator
 
             float spikyGradConst = -30f / (3.14159f * Hlsl.Pow(h, 5));
             float viscLapConst = 40f / (3.14159f * Hlsl.Pow(h, 5));
+            float poly6GradConst = -24f / (3.14159f * Hlsl.Pow(h, 8));
+            float poly6Const = 4f / (3.14159f * Hlsl.Pow(h, 8)); // For XSPH (W_ij)
+
             float h2 = h * h;
 
             int cx = (int)(p.X / gridCellSize);
@@ -561,28 +587,22 @@ namespace FluidSimulation
                             {
                                 float r = Hlsl.Sqrt(r2);
                                 float h_r = h - r;
-                                
                                 int nType = type[neighborIdx];
 
-                                if (nType == 1) // BOUNDARY PARTICLE
+                                if (nType == 1) // BOUNDARY
                                 {
-                                    // Strong repulsive force for walls
                                     float repulsionStrength = 20000.0f; 
-                                    // If strictly within influence radius
                                     if (r < h * 0.8f) 
                                     {
                                         float factor = 1.0f - (r / (h * 0.8f));
-                                        // Squared falloff
                                         float f = repulsionStrength * factor * factor;
                                         force.X += (dx / r) * f;
                                         force.Y += (dy / r) * f;
                                     }
-                                    
-                                    // Friction
-                                    force.X -= v.X * 5.0f;
-                                    force.Y -= v.Y * 5.0f;
+                                    force.X -= v.X * 10.0f; // Stronger friction
+                                    force.Y -= v.Y * 10.0f;
                                 }
-                                else // FLUID PARTICLE
+                                else // FLUID
                                 {
                                     float neighborRho = density[neighborIdx];
                                     float neighborRatio = neighborRho / restDensity;
@@ -590,26 +610,62 @@ namespace FluidSimulation
                                     float neighborPressure = stiffness * (Hlsl.Pow(neighborRatio, taitGamma) - 1.0f);
                                     if (neighborPressure < 0) neighborPressure = 0;
 
+                                    // 1. Pressure
                                     float pTerm = (pressure / (rho * rho)) + (neighborPressure / (neighborRho * neighborRho));
                                     float gradMag = spikyGradConst * h_r * h_r; 
-                                    
                                     Float2 gradW = new Float2(dx / r * gradMag, dy / r * gradMag);
                                     
                                     force.X -= mass * pTerm * gradW.X;
                                     force.Y -= mass * pTerm * gradW.Y;
 
-                                    // Viscosity
+                                    // 2. Physical Viscosity
                                     Float2 nv = vel[neighborIdx];
                                     float laplacian = viscLapConst * h_r;
                                     float viscTerm = viscosity * mass / (neighborRho * rho); 
                                     force.X += viscTerm * laplacian * (nv.X - v.X);
                                     force.Y += viscTerm * laplacian * (nv.Y - v.Y);
+
+                                    // 3. Surface Tension
+                                    float termSq = (h2 - r2);
+                                    float poly6GradMag = poly6GradConst * termSq * termSq * r; 
+                                    force.X -= surfaceTension * mass * poly6GradMag * (dx / r);
+                                    force.Y -= surfaceTension * mass * poly6GradMag * (dy / r);
+
+                                    // 4. XSPH Artificial Viscosity
+                                    // v_corr = epsilon * sum( m/rho * v_rel * W )
+                                    float poly6Val = poly6Const * termSq * termSq * termSq;
+                                    float xsphFactor = (mass / neighborRho) * poly6Val;
+                                    xsphVelCorrection.X += (nv.X - v.X) * xsphFactor;
+                                    xsphVelCorrection.Y += (nv.Y - v.Y) * xsphFactor;
                                 }
                             }
                         }
                         neighborIdx = nextParticle[neighborIdx];
                     }
                 }
+            }
+
+            // Convert XSPH Velocity Correction to an Acceleration
+            // v_new = v + v_corr -> v_new = v + a * dt
+            // a_xsph = v_corr * epsilon / dt
+            
+            if (deltaTime > 0.000001f)
+            {
+                force.X += (xsphVelCorrection.X * xsphEpsilon) / deltaTime; // Note: Mass cancels out if we consider this a velocity blend
+                force.Y += (xsphVelCorrection.Y * xsphEpsilon) / deltaTime; 
+                // Actually, typically XSPH is applied at integration. 
+                // But applying as force: F = m * a
+                // a = v_corr / dt
+                // force += mass * a
+                // Let's assume unit mass for the blend or just add to acceleration directly?
+                // The accumulator `force` is Force. `acc` is Force/Mass.
+                // Let's add it to force, scaled by mass.
+                
+                // Correction: The formula v_i = v_i + eps * sum(...) is a position update velocity.
+                // If we want to effect the velocity state `v`, we treat it as a force.
+                // Force XSPH = Mass * (Correction / dt)
+                force.X += mass * (xsphVelCorrection.X * xsphEpsilon) / deltaTime;
+                force.Y += mass * (xsphVelCorrection.Y * xsphEpsilon) / deltaTime;
             }
 
             // Mouse Interaction
@@ -627,10 +683,10 @@ namespace FluidSimulation
                 }
             }
 
-            acc[i] = new Float2(force.X, gravityY + force.Y);
+            // F = ma -> a = F/m
+            acc[i] = new Float2(force.X / mass, gravityY + (force.Y / mass));
         }
     }
-
     [ComputeSharp.GeneratedComputeShaderDescriptor]
     [ComputeSharp.ThreadGroupSize(64, 1, 1)]
     public readonly partial struct IntegrateShader : IComputeShader
@@ -657,6 +713,7 @@ namespace FluidSimulation
             int i = ThreadIds.X;
             if (i >= particleCount) return;
 
+            // Freeze boundary particles
             if (type[i] == 1) return;
 
             Float2 p = pos[i];
@@ -667,7 +724,6 @@ namespace FluidSimulation
             v.X += a.X * deltaTime;
             v.Y += a.Y * deltaTime;
             
-            // Speed Limit
             float vSq = v.X * v.X + v.Y * v.Y;
             if (vSq > 4000000.0f) 
             {
@@ -679,32 +735,11 @@ namespace FluidSimulation
             p.X += v.X * deltaTime;
             p.Y += v.Y * deltaTime;
 
-            // HARD GEOMETRIC BOUNDARY CLAMP (The "Nuclear Option" against leaks)
-            // Even if physics fails, we force the particle back inside.
-            // We assume a margin of 20 pixels (roughly the wall thickness)
-            const float margin = 20.0f;
-
-            if (p.X < margin) 
-            { 
-                p.X = margin; 
-                v.X *= wallDamping; 
-            }
-            else if (p.X > width - margin) 
-            { 
-                p.X = width - margin; 
-                v.X *= wallDamping; 
-            }
-
-            if (p.Y < margin) 
-            { 
-                p.Y = margin; 
-                v.Y *= wallDamping; 
-            }
-            else if (p.Y > height - margin) 
-            { 
-                p.Y = height - margin; 
-                v.Y *= wallDamping; 
-            }
+            // Simple domain wrap/clamp just in case physics explodes
+            if (p.X < 0) p.X = 0;
+            if (p.X > width) p.X = width;
+            if (p.Y < 0) p.Y = 0;
+            if (p.Y > height) p.Y = height;
 
             vel[i] = v;
             pos[i] = p;
