@@ -19,7 +19,7 @@ namespace FluidSimulation
 
     public class Simulation : IDisposable
     {
-        private const int MaxParticles = 150000; 
+        private const int MaxParticles = 7000; //bis 7000 für Arbeit und bis 150000 für privat
         private int particleCount = 0;
         private const int InitialCount = 500;
 
@@ -143,6 +143,10 @@ namespace FluidSimulation
                 for (int i = 0; i < particleCount; i++)
                 {
                     Raylib.DrawPixel((int)cpuPos[i].X, (int)cpuPos[i].Y, Color.SkyBlue);
+                    Raylib.DrawPixel((int)cpuPos[i].X + 1, (int)cpuPos[i].Y, Color.SkyBlue);
+                    Raylib.DrawPixel((int)cpuPos[i].X, (int)cpuPos[i].Y + 1, Color.SkyBlue);
+                    Raylib.DrawPixel((int)cpuPos[i].X + 1, (int)cpuPos[i].Y + 1, Color.SkyBlue);
+
                 }
 
                 Raylib.EndTextureMode();
