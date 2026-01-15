@@ -23,7 +23,7 @@ namespace FluidSimulation
         private int particleCount = 0;
         private const int InitialCount = 500;
 
-        private const float MouseForce = -1000f;
+        private const float MouseForce = -1500f;
         private const float MouseRadius = 100f;
         private const int ParticlesToSpawn = 10;
 
@@ -139,12 +139,12 @@ namespace FluidSimulation
 
                 Raylib.BeginTextureMode(targetTexture);
                 Raylib.ClearBackground(Color.Black);
-                
+
                 for (int i = 0; i < particleCount; i++)
                 {
                     Raylib.DrawPixel((int)cpuPos[i].X, (int)cpuPos[i].Y, Color.SkyBlue);
                 }
-                
+
                 Raylib.EndTextureMode();
 
                 Raylib.BeginDrawing();
