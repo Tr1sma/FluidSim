@@ -143,10 +143,6 @@ namespace FluidSimulation
                 for (int i = 0; i < particleCount; i++)
                 {
                     Raylib.DrawPixel((int)cpuPos[i].X, (int)cpuPos[i].Y, Color.SkyBlue);
-                    Raylib.DrawPixel((int)cpuPos[i].X + 1, (int)cpuPos[i].Y, Color.SkyBlue);
-                    Raylib.DrawPixel((int)cpuPos[i].X, (int)cpuPos[i].Y + 1, Color.SkyBlue);
-                    Raylib.DrawPixel((int)cpuPos[i].X + 1, (int)cpuPos[i].Y + 1, Color.SkyBlue);
-
                 }
 
                 Raylib.EndTextureMode();
