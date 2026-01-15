@@ -27,7 +27,7 @@ namespace FluidSimulation
         private const float MouseRadius = 100f;
         private const int ParticlesToSpawn = 10;
 
-        private const float WallMargin = 3;
+        private const float WallMargin = 25f;
         private const float WallForce = 2000f + GravityY;
 
         private const float GravityY = 9.81f * 100f;
