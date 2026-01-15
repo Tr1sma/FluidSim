@@ -9,7 +9,7 @@ namespace FluidSimulation
     {
         public static void Main()
         {
-            Raylib.InitWindow(1000, 600, "Fluid Simulation - SPH 2D");
+            Raylib.InitWindow(1000, 600, "Fluid Simulation - Accurate Tait SPH + Ghost Walls");
             Raylib.SetTargetFPS(60); 
 
             using var sim = new Simulation();
@@ -19,25 +19,22 @@ namespace FluidSimulation
 
     public class Simulation : IDisposable
     {
-        private const int MaxParticles = 4000; // Fewer particles but larger
+        private const int MaxParticles = 8000; 
         private int particleCount = 0;
-        private const int InitialCount = 2000;
+        private const int InitialFluidCount = 2000;
 
         // SPH Constants
         private const float SmoothingRadius = 24.0f; 
         private const float GridCellSize = SmoothingRadius; 
         private const float RestDensity = 1.0f; 
-        private const float Stiffness = 2000f; 
-        private const float Viscosity = 300f; 
-        
-        // Target Spacing ~ 6 pixels. 
-        // Mass approx = RestDensity * Spacing^2 = 1 * 36 = 36.
+        private const float Stiffness = 3500f; 
+        private const float TaitGamma = 7.0f;
+        private const float Viscosity = 250f; 
         private const float ParticleMass = 25.0f; 
 
         private const float GravityY = 9.81f * 60f; 
         private const float WallDamping = -0.5f;
         
-        // Interaction
         private const float MouseForce = -1500f;
         private const float MouseRadius = 150f;
         private const int ParticlesToSpawn = 5;
@@ -47,13 +44,14 @@ namespace FluidSimulation
         private readonly ReadWriteBuffer<Float2> velBuffer;
         private readonly ReadWriteBuffer<Float2> accBuffer;
         private readonly ReadWriteBuffer<float> densityBuffer; 
+        private readonly ReadWriteBuffer<int> typeBuffer; 
         
         private readonly ReadWriteBuffer<int> gridHeadsBuffer;
         private readonly ReadWriteBuffer<int> nextParticleBuffer;
 
-        // CPU arrays for rendering
         private readonly Float2[] cpuPos;
         private readonly float[] cpuDensity; 
+        private readonly int[] cpuType;
         
         private readonly int screenWidth;
         private readonly int screenHeight;
@@ -70,7 +68,6 @@ namespace FluidSimulation
             screenWidth = Raylib.GetScreenWidth();
             screenHeight = Raylib.GetScreenHeight();
 
-            // Setup Grid
             gridCols = (int)(screenWidth / GridCellSize) + 2; 
             gridRows = (int)(screenHeight / GridCellSize) + 2;
 
@@ -80,12 +77,14 @@ namespace FluidSimulation
             velBuffer = device.AllocateReadWriteBuffer<Float2>(MaxParticles);
             accBuffer = device.AllocateReadWriteBuffer<Float2>(MaxParticles);
             densityBuffer = device.AllocateReadWriteBuffer<float>(MaxParticles);
+            typeBuffer = device.AllocateReadWriteBuffer<int>(MaxParticles);
             
             gridHeadsBuffer = device.AllocateReadWriteBuffer<int>(gridCols * gridRows);
             nextParticleBuffer = device.AllocateReadWriteBuffer<int>(MaxParticles);
 
             cpuPos = new Float2[MaxParticles];
             cpuDensity = new float[MaxParticles];
+            cpuType = new int[MaxParticles];
             
             targetTexture = Raylib.LoadRenderTexture(screenWidth, screenHeight);
 
@@ -95,36 +94,90 @@ namespace FluidSimulation
         private void InitializeParticles(int width, int height)
         {
             var rand = new Random();
-            Float2[] initPos = new Float2[InitialCount];
-            Float2[] initVel = new Float2[InitialCount];
-            float[] initDensity = new float[InitialCount];
+            Float2[] initPos = new Float2[MaxParticles];
+            Float2[] initVel = new Float2[MaxParticles];
+            float[] initDensity = new float[MaxParticles];
+            int[] initType = new int[MaxParticles];
 
-            int cols = (int)Math.Sqrt(InitialCount * 2); 
-            float spacing = SmoothingRadius * 0.4f;
+            int idx = 0;
 
-            for (int i = 0; i < InitialCount; i++)
+            // 1. Create Boundary Particles (Type 1) - 3 Layers
+            float spacing = SmoothingRadius * 0.5f;
+            
+            // Bottom Wall
+            for (int layer = 0; layer < 3; layer++)
             {
-                float x = (width / 2 - (cols * spacing)/2) + (i % cols) * spacing;
-                float y = (height / 2 - (cols * spacing)/2) + (i / cols) * spacing;
+                float y = height - 10 + (layer * spacing); 
+                for (float x = 0; x < width; x += spacing)
+                {
+                    if (idx >= MaxParticles) break;
+                    initPos[idx] = new Float2(x, y);
+                    initType[idx] = 1;
+                    initDensity[idx] = RestDensity;
+                    idx++;
+                }
+            }
+
+            // Left Wall
+            for (int layer = 0; layer < 3; layer++)
+            {
+                float x = 10 - (layer * spacing);
+                for (float y = 0; y < height; y += spacing)
+                {
+                    if (idx >= MaxParticles) break;
+                    initPos[idx] = new Float2(x, y);
+                    initType[idx] = 1;
+                    initDensity[idx] = RestDensity;
+                    idx++;
+                }
+            }
+
+            // Right Wall
+            for (int layer = 0; layer < 3; layer++)
+            {
+                float x = width - 10 + (layer * spacing);
+                for (float y = 0; y < height; y += spacing)
+                {
+                    if (idx >= MaxParticles) break;
+                    initPos[idx] = new Float2(x, y);
+                    initType[idx] = 1;
+                    initDensity[idx] = RestDensity;
+                    idx++;
+                }
+            }
+            
+            // 2. Create Fluid Particles (Type 0)
+            int fluidCols = (int)Math.Sqrt(InitialFluidCount * 2); 
+            float fluidSpacing = SmoothingRadius * 0.4f;
+
+            for (int i = 0; i < InitialFluidCount; i++)
+            {
+                if (idx >= MaxParticles) break;
+
+                float x = (width / 2 - (fluidCols * fluidSpacing)/2) + (i % fluidCols) * fluidSpacing;
+                float y = (height / 2 - (fluidCols * fluidSpacing)/2) + (i / fluidCols) * fluidSpacing;
                 
                 x += (float)(rand.NextDouble() * 2.0 - 1.0);
                 y += (float)(rand.NextDouble() * 2.0 - 1.0);
 
-                initPos[i] = new Float2(x, y);
-                initVel[i] = new Float2(0, 0);
-                initDensity[i] = RestDensity; 
+                initPos[idx] = new Float2(x, y);
+                initVel[idx] = new Float2(0, 0);
+                initDensity[idx] = RestDensity; 
+                initType[idx] = 0;
+                idx++;
             }
 
-            posBuffer.CopyFrom(initPos, 0, 0, InitialCount);
-            velBuffer.CopyFrom(initVel, 0, 0, InitialCount);
-            densityBuffer.CopyFrom(initDensity, 0, 0, InitialCount);
+            posBuffer.CopyFrom(initPos, 0, 0, idx);
+            velBuffer.CopyFrom(initVel, 0, 0, idx);
+            densityBuffer.CopyFrom(initDensity, 0, 0, idx);
+            typeBuffer.CopyFrom(initType, 0, 0, idx);
 
-            particleCount = InitialCount;
+            particleCount = idx;
         }
 
         public void Run()
         {
-            const float PhysicsStep = 0.001f; 
+            const float PhysicsStep = 0.0008f; 
             double accumulator = 0.0;
             
             while (!Raylib.WindowShouldClose())
@@ -156,6 +209,7 @@ namespace FluidSimulation
             {
                 posBuffer.CopyTo(cpuPos, 0, 0, particleCount);
                 densityBuffer.CopyTo(cpuDensity, 0, 0, particleCount);
+                typeBuffer.CopyTo(cpuType, 0, 0, particleCount);
             }
 
             Raylib.BeginTextureMode(targetTexture);
@@ -163,15 +217,22 @@ namespace FluidSimulation
 
             for (int i = 0; i < particleCount; i++)
             {
-                float rho = cpuDensity[i];
-                float n = (rho - RestDensity) / RestDensity; 
-                
-                byte r = (byte)Math.Clamp(n * 255, 0, 255);
-                byte g = (byte)Math.Clamp(50 + n * 155, 50, 255);
-                byte b = 255;
-                
-                // Draw circle to represent particle volume
-                Raylib.DrawCircle((int)cpuPos[i].X, (int)cpuPos[i].Y, 3.0f, new Color(r, g, b, (byte)200));
+                if (cpuType[i] == 1) // Boundary
+                {
+                     // Debug draw for boundary
+                     Raylib.DrawCircle((int)cpuPos[i].X, (int)cpuPos[i].Y, 2.0f, new Color(50, 50, 50, 255));
+                }
+                else // Fluid
+                {
+                    float rho = cpuDensity[i];
+                    float n = (rho - RestDensity) / RestDensity; 
+                    
+                    byte r = (byte)Math.Clamp(n * 255, 0, 255);
+                    byte g = (byte)Math.Clamp(50 + n * 155, 50, 255);
+                    byte b = 255;
+                    
+                    Raylib.DrawCircle((int)cpuPos[i].X, (int)cpuPos[i].Y, 3.5f, new Color(r, g, b, (byte)200));
+                }
             }
 
             Raylib.EndTextureMode();
@@ -224,6 +285,7 @@ namespace FluidSimulation
                 posBuffer,
                 velBuffer,
                 densityBuffer,
+                typeBuffer, // Pass Type Buffer
                 gridHeadsBuffer,
                 nextParticleBuffer,
                 gridCols,
@@ -242,13 +304,15 @@ namespace FluidSimulation
                 mousePosition.X,
                 mousePosition.Y,
                 MouseRadius,
-                MouseForce
+                MouseForce,
+                TaitGamma
             ));
 
             device.For(particleCount, new IntegrateShader(
                 posBuffer,
                 velBuffer,
                 accBuffer,
+                typeBuffer,
                 particleCount,
                 deltaTime,
                 screenWidth,
@@ -266,6 +330,7 @@ namespace FluidSimulation
             Float2[] newPos = new Float2[ParticlesToSpawn];
             Float2[] newVel = new Float2[ParticlesToSpawn];
             float[] newDensity = new float[ParticlesToSpawn];
+            int[] newType = new int[ParticlesToSpawn];
 
             for (int k = 0; k < ParticlesToSpawn; k++) 
             {
@@ -277,6 +342,7 @@ namespace FluidSimulation
                 );
                 newVel[actualSpawn] = new Float2((float)rand.NextDouble() * 20 - 10, 50);
                 newDensity[actualSpawn] = RestDensity;
+                newType[actualSpawn] = 0; 
                 actualSpawn++;
             }
 
@@ -285,6 +351,7 @@ namespace FluidSimulation
                 posBuffer.CopyFrom(newPos, 0, particleCount, actualSpawn);
                 velBuffer.CopyFrom(newVel, 0, particleCount, actualSpawn);
                 densityBuffer.CopyFrom(newDensity, 0, particleCount, actualSpawn);
+                typeBuffer.CopyFrom(newType, 0, particleCount, actualSpawn);
                 particleCount += actualSpawn;
             }
         }
@@ -295,6 +362,7 @@ namespace FluidSimulation
             velBuffer.Dispose();
             accBuffer.Dispose();
             densityBuffer.Dispose();
+            typeBuffer.Dispose();
             gridHeadsBuffer.Dispose();
             nextParticleBuffer.Dispose();
             Raylib.UnloadRenderTexture(targetTexture);
@@ -337,7 +405,6 @@ namespace FluidSimulation
             Float2 p = pos[i];
             int cx = (int)(p.X / gridCellSize);
             int cy = (int)(p.Y / gridCellSize);
-            // Clamp to grid
             cx = Hlsl.Clamp(cx, 0, gridCols - 1);
             cy = Hlsl.Clamp(cy, 0, gridRows - 1);
 
@@ -358,7 +425,7 @@ namespace FluidSimulation
         public readonly ReadWriteBuffer<float> density;
         
         public readonly int gridCols, gridRows, particleCount, gridCellSize;
-        public readonly float h; // Smoothing Radius
+        public readonly float h; 
         public readonly float mass;
 
         public ComputeDensityShader(ReadWriteBuffer<Float2> pos, ReadWriteBuffer<int> gridHeads, ReadWriteBuffer<int> nextParticle, ReadWriteBuffer<float> density, int gridCols, int gridRows, int particleCount, int gridCellSize, float h, float mass)
@@ -376,7 +443,6 @@ namespace FluidSimulation
             Float2 p = pos[i];
             float rho = 0f;
 
-            // Poly6 Kernel (2D): 4 / (pi * h^8)
             float poly6Const = 4f / (3.14159f * Hlsl.Pow(h, 8));
             float h2 = h * h;
 
@@ -422,6 +488,7 @@ namespace FluidSimulation
         public readonly ReadWriteBuffer<Float2> pos;
         public readonly ReadWriteBuffer<Float2> vel;
         public readonly ReadWriteBuffer<float> density;
+        public readonly ReadWriteBuffer<int> type;
         public readonly ReadWriteBuffer<int> gridHeads;
         public readonly ReadWriteBuffer<int> nextParticle;
 
@@ -430,14 +497,16 @@ namespace FluidSimulation
         public readonly int screenWidth, screenHeight;
         public readonly int isMouseLeftDown;
         public readonly float mouseX, mouseY, mouseRadius, mouseForce;
+        public readonly float taitGamma;
 
-        public ComputeForcesShader(ReadWriteBuffer<Float2> acc, ReadWriteBuffer<Float2> pos, ReadWriteBuffer<Float2> vel, ReadWriteBuffer<float> density, ReadWriteBuffer<int> gridHeads, ReadWriteBuffer<int> nextParticle, int gridCols, int gridRows, int particleCount, int gridCellSize, float h, float mass, float restDensity, float stiffness, float viscosity, float gravityY, int screenWidth, int screenHeight, int isMouseLeftDown, float mouseX, float mouseY, float mouseRadius, float mouseForce)
+        public ComputeForcesShader(ReadWriteBuffer<Float2> acc, ReadWriteBuffer<Float2> pos, ReadWriteBuffer<Float2> vel, ReadWriteBuffer<float> density, ReadWriteBuffer<int> type, ReadWriteBuffer<int> gridHeads, ReadWriteBuffer<int> nextParticle, int gridCols, int gridRows, int particleCount, int gridCellSize, float h, float mass, float restDensity, float stiffness, float viscosity, float gravityY, int screenWidth, int screenHeight, int isMouseLeftDown, float mouseX, float mouseY, float mouseRadius, float mouseForce, float taitGamma)
         {
-            this.acc = acc; this.pos = pos; this.vel = vel; this.density = density; this.gridHeads = gridHeads; this.nextParticle = nextParticle;
+            this.acc = acc; this.pos = pos; this.vel = vel; this.density = density; this.type = type; this.gridHeads = gridHeads; this.nextParticle = nextParticle;
             this.gridCols = gridCols; this.gridRows = gridRows; this.particleCount = particleCount; this.gridCellSize = gridCellSize;
             this.h = h; this.mass = mass; this.restDensity = restDensity; this.stiffness = stiffness; this.viscosity = viscosity; this.gravityY = gravityY;
             this.screenWidth = screenWidth; this.screenHeight = screenHeight;
             this.isMouseLeftDown = isMouseLeftDown; this.mouseX = mouseX; this.mouseY = mouseY; this.mouseRadius = mouseRadius; this.mouseForce = mouseForce;
+            this.taitGamma = taitGamma;
         }
 
         public void Execute()
@@ -445,22 +514,27 @@ namespace FluidSimulation
             int i = ThreadIds.X;
             if (i >= particleCount) return;
 
+            // Don't compute forces FOR wall particles
+            if (type[i] == 1) 
+            {
+                acc[i] = new Float2(0, 0);
+                return;
+            }
+
             Float2 p = pos[i];
             Float2 v = vel[i];
             float rho = density[i];
             
-            // Pressure calculation with Clamping
-            float pressure = stiffness * (rho - restDensity);
+            // Tait Equation
+            float densityRatio = rho / restDensity;
+            if (densityRatio < 0.5f) densityRatio = 0.5f;
+            float pressure = stiffness * (Hlsl.Pow(densityRatio, taitGamma) - 1.0f);
             if (pressure < 0) pressure = 0; 
 
             Float2 force = new Float2(0, 0);
 
-            // Spiky Kernel Gradient Constant (2D): -30 / (pi * h^5)
             float spikyGradConst = -30f / (3.14159f * Hlsl.Pow(h, 5));
-            
-            // Viscosity Laplacian Constant (2D): 40 / (pi * h^5)
             float viscLapConst = 40f / (3.14159f * Hlsl.Pow(h, 5));
-            
             float h2 = h * h;
 
             int cx = (int)(p.X / gridCellSize);
@@ -488,34 +562,49 @@ namespace FluidSimulation
                                 float r = Hlsl.Sqrt(r2);
                                 float h_r = h - r;
                                 
-                                float neighborRho = density[neighborIdx];
-                                float neighborPressure = stiffness * (neighborRho - restDensity);
-                                if (neighborPressure < 0) neighborPressure = 0;
+                                int nType = type[neighborIdx];
 
-                                // Pressure Force (Symmetric)
-                                float pTerm = (pressure / (rho * rho)) + (neighborPressure / (neighborRho * neighborRho));
-                                float gradMag = spikyGradConst * h_r * h_r; // (h-r)^2
-                                
-                                Float2 gradW = new Float2(dx / r * gradMag, dy / r * gradMag);
-                                
-                                force.X -= mass * pTerm * gradW.X;
-                                force.Y -= mass * pTerm * gradW.Y;
-
-                                // Near-field repulsion (Anti-Clumping)
-                                if (r < h * 0.2f)
+                                if (nType == 1) // BOUNDARY PARTICLE
                                 {
-                                     float repulsion = 500000.0f * (1.0f - r / (h * 0.2f));
-                                     force.X += (dx / r) * repulsion;
-                                     force.Y += (dy / r) * repulsion;
+                                    // Strong repulsive force for walls
+                                    float repulsionStrength = 20000.0f; 
+                                    // If strictly within influence radius
+                                    if (r < h * 0.8f) 
+                                    {
+                                        float factor = 1.0f - (r / (h * 0.8f));
+                                        // Squared falloff
+                                        float f = repulsionStrength * factor * factor;
+                                        force.X += (dx / r) * f;
+                                        force.Y += (dy / r) * f;
+                                    }
+                                    
+                                    // Friction
+                                    force.X -= v.X * 5.0f;
+                                    force.Y -= v.Y * 5.0f;
                                 }
+                                else // FLUID PARTICLE
+                                {
+                                    float neighborRho = density[neighborIdx];
+                                    float neighborRatio = neighborRho / restDensity;
+                                    if (neighborRatio < 0.5f) neighborRatio = 0.5f;
+                                    float neighborPressure = stiffness * (Hlsl.Pow(neighborRatio, taitGamma) - 1.0f);
+                                    if (neighborPressure < 0) neighborPressure = 0;
 
-                                // Viscosity Force
-                                Float2 nv = vel[neighborIdx];
-                                float laplacian = viscLapConst * h_r; // (h-r)
-                                
-                                float viscTerm = viscosity * mass / (neighborRho * rho); 
-                                force.X += viscTerm * laplacian * (nv.X - v.X);
-                                force.Y += viscTerm * laplacian * (nv.Y - v.Y);
+                                    float pTerm = (pressure / (rho * rho)) + (neighborPressure / (neighborRho * neighborRho));
+                                    float gradMag = spikyGradConst * h_r * h_r; 
+                                    
+                                    Float2 gradW = new Float2(dx / r * gradMag, dy / r * gradMag);
+                                    
+                                    force.X -= mass * pTerm * gradW.X;
+                                    force.Y -= mass * pTerm * gradW.Y;
+
+                                    // Viscosity
+                                    Float2 nv = vel[neighborIdx];
+                                    float laplacian = viscLapConst * h_r;
+                                    float viscTerm = viscosity * mass / (neighborRho * rho); 
+                                    force.X += viscTerm * laplacian * (nv.X - v.X);
+                                    force.Y += viscTerm * laplacian * (nv.Y - v.Y);
+                                }
                             }
                         }
                         neighborIdx = nextParticle[neighborIdx];
@@ -533,7 +622,6 @@ namespace FluidSimulation
                 {
                     float d = Hlsl.Sqrt(d2);
                     float f = mouseForce * (1.0f - d / mouseRadius);
-                    // Reduced multiplier from 500f to 50f to prevent explosion
                     force.X += (dx / d) * f * 50f; 
                     force.Y += (dy / d) * f * 50f;
                 }
@@ -550,6 +638,7 @@ namespace FluidSimulation
         public readonly ReadWriteBuffer<Float2> pos;
         public readonly ReadWriteBuffer<Float2> vel;
         public readonly ReadWriteBuffer<Float2> acc;
+        public readonly ReadWriteBuffer<int> type;
         
         public readonly int particleCount;
         public readonly float deltaTime;
@@ -557,9 +646,9 @@ namespace FluidSimulation
         public readonly int height;
         public readonly float wallDamping;
 
-        public IntegrateShader(ReadWriteBuffer<Float2> pos, ReadWriteBuffer<Float2> vel, ReadWriteBuffer<Float2> acc, int particleCount, float deltaTime, int width, int height, float wallDamping)
+        public IntegrateShader(ReadWriteBuffer<Float2> pos, ReadWriteBuffer<Float2> vel, ReadWriteBuffer<Float2> acc, ReadWriteBuffer<int> type, int particleCount, float deltaTime, int width, int height, float wallDamping)
         {
-            this.pos = pos; this.vel = vel; this.acc = acc;
+            this.pos = pos; this.vel = vel; this.acc = acc; this.type = type;
             this.particleCount = particleCount; this.deltaTime = deltaTime; this.width = width; this.height = height; this.wallDamping = wallDamping;
         }
         
@@ -568,17 +657,19 @@ namespace FluidSimulation
             int i = ThreadIds.X;
             if (i >= particleCount) return;
 
+            if (type[i] == 1) return;
+
             Float2 p = pos[i];
             Float2 v = vel[i];
             Float2 a = acc[i];
 
-            // Simple Euler Integration with Speed Limit
+            // Semi-implicit Euler
             v.X += a.X * deltaTime;
             v.Y += a.Y * deltaTime;
             
-            // Clamp velocity to prevent explosions (e.g., max 2000 px/s)
+            // Speed Limit
             float vSq = v.X * v.X + v.Y * v.Y;
-            if (vSq > 4000000.0f) // 2000^2
+            if (vSq > 4000000.0f) 
             {
                 float len = Hlsl.Sqrt(vSq);
                 v.X = (v.X / len) * 2000.0f;
@@ -588,12 +679,32 @@ namespace FluidSimulation
             p.X += v.X * deltaTime;
             p.Y += v.Y * deltaTime;
 
-            // Wall Collisions
-            const float margin = 5.0f;
-            if (p.X < margin) { p.X = margin; v.X *= wallDamping; }
-            if (p.X > width - margin) { p.X = width - margin; v.X *= wallDamping; }
-            if (p.Y < margin) { p.Y = margin; v.Y *= wallDamping; }
-            if (p.Y > height - margin) { p.Y = height - margin; v.Y *= wallDamping; }
+            // HARD GEOMETRIC BOUNDARY CLAMP (The "Nuclear Option" against leaks)
+            // Even if physics fails, we force the particle back inside.
+            // We assume a margin of 20 pixels (roughly the wall thickness)
+            const float margin = 20.0f;
+
+            if (p.X < margin) 
+            { 
+                p.X = margin; 
+                v.X *= wallDamping; 
+            }
+            else if (p.X > width - margin) 
+            { 
+                p.X = width - margin; 
+                v.X *= wallDamping; 
+            }
+
+            if (p.Y < margin) 
+            { 
+                p.Y = margin; 
+                v.Y *= wallDamping; 
+            }
+            else if (p.Y > height - margin) 
+            { 
+                p.Y = height - margin; 
+                v.Y *= wallDamping; 
+            }
 
             vel[i] = v;
             pos[i] = p;
