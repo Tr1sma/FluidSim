@@ -123,7 +123,7 @@ namespace FluidSimulation
             window.Resize += OnResize;
 
             // Init Simulation Data
-            gridCols = (screenWidth / GridCellSize) + 1; 
+            gridCols = (screenWidth / GridCellSize) + 1;
             gridRows = (screenHeight / GridCellSize) + 1;
 
             GraphicsDevice device = GraphicsDevice.GetDefault();
