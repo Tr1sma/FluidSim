@@ -139,6 +139,7 @@ namespace FluidSimulation
 
             InitializeParticles(screenWidth, screenHeight);
             InitGraphics();
+
         }
 
         private void OnResize(Vector2D<int> newSize)
@@ -429,7 +430,7 @@ namespace FluidSimulation
     }
 
     [ComputeSharp.GeneratedComputeShaderDescriptor]
-    [ComputeSharp.ThreadGroupSize(16, 1, 1)]
+    [ComputeSharp.ThreadGroupSize(32, 1, 1)]
     public readonly partial struct ClearGridShaderOpt : IComputeShader
     {
         public readonly ReadWriteBuffer<int> gridHeads;
@@ -446,7 +447,7 @@ namespace FluidSimulation
     }
 
     [ComputeSharp.GeneratedComputeShaderDescriptor]
-    [ComputeSharp.ThreadGroupSize(16, 1, 1)]
+    [ComputeSharp.ThreadGroupSize(32, 1, 1)]
     public readonly partial struct BuildGridShaderOpt : IComputeShader
     {
         public readonly ReadWriteBuffer<int> gridHeads;
@@ -496,7 +497,7 @@ namespace FluidSimulation
     }
 
     [ComputeSharp.GeneratedComputeShaderDescriptor]
-    [ComputeSharp.ThreadGroupSize(16, 1, 1)]
+    [ComputeSharp.ThreadGroupSize(32, 1, 1)]
     public readonly partial struct CalculateForcesShaderOpt : IComputeShader
     {
         public readonly ReadWriteBuffer<Float2> acc;
@@ -667,7 +668,7 @@ namespace FluidSimulation
     }
 
     [ComputeSharp.GeneratedComputeShaderDescriptor]
-    [ComputeSharp.ThreadGroupSize(16, 1, 1)]
+    [ComputeSharp.ThreadGroupSize(32, 1, 1)]
     public readonly partial struct UpdateParticlesShaderOpt : IComputeShader
     {
         public readonly ReadWriteBuffer<Float2> pos;
