@@ -17,12 +17,60 @@ namespace FluidSimulation
         }
     }
 
-    public class Simulation
+        private static void OnUpdate(double deltaTime)
+        {
+            sim.Update((float)deltaTime);
+        }
+
+        private static void OnRender(double deltaTime)
+        {
+            sim.Render((float)deltaTime);
+        }
+
+        private static void OnClosing()
+        {
+            sim.Dispose();
+        }
+    }
+
+    public unsafe class Simulation : IDisposable
     {
-        private const int MaxParticles = 10000; 
-        private int particleCount = 0;
+        private GL Gl;
+        private IInputContext inputContext;
+        private ImGuiController imGuiController;
+        private IWindow window;
+
+        // OpenGL resources
+        private uint vao;
+        private uint vbo;
+        private uint shaderProgram;
+
+        private const int MaxParticles = 10000;
+        private static int particleCount = 0;
         private const int InitialCount = 1500;
 
+        private float mouseForce = -3500f + (particleCount / 10);
+        private const float MouseRadius = 100f;
+        private const int ParticlesToSpawn = 10;
+
+        private const float WallMargin = 25f;
+        private const float WallForce = 2000f + GravityY;
+        private const float GravityY = 9.81f * 100f;
+
+        // GPU Buffers (ComputeSharp)
+        private ReadWriteBuffer<Float2> posBuffer;
+        private ReadWriteBuffer<Float2> velBuffer;
+        private ReadWriteBuffer<Float2> accBuffer;
+        
+        private ReadWriteBuffer<int> gridHeadsBuffer;
+        private ReadWriteBuffer<int> nextParticleBuffer;
+
+        // CPU arrays for rendering
+        private readonly Float2[] cpuPos;
+        
+        private int screenWidth;
+        private int screenHeight;
+        
         private const float ParticleMass = 5f;
         private const float MouseForce = -1000f;
         private const float MouseRadius = 100f;
@@ -34,7 +82,7 @@ namespace FluidSimulation
 
         private const float GravityY = 45f * 10f;
         //9.81 gewichtskraft erde
-        //45 für wasser ähnliches verhalten
+        //45 f�r wasser �hnliches verhalten
 
         private float[] posX = new float[MaxParticles];
         private float[] posY = new float[MaxParticles];
@@ -127,9 +175,56 @@ namespace FluidSimulation
 
             if ((currentMouseButtons & MouseButtons.Right) != 0) SpawnParticles();
 
-            UpdateGrid();
-            CalculateForces();
-            UpdateParticles(deltaTime);
+            GraphicsDevice device = GraphicsDevice.GetDefault();
+
+            int totalGridCells = gridCols * gridRows;
+            device.For(totalGridCells, new ClearGridShaderOpt(gridHeadsBuffer));
+
+            device.For(particleCount, new BuildGridShaderOpt(
+                gridHeadsBuffer,
+                nextParticleBuffer,
+                posBuffer,
+                gridCols,
+                gridRows,
+                particleCount,
+                GridCellSize
+            ));
+
+            device.For(particleCount, new CalculateForcesShaderOpt(
+                accBuffer,
+                posBuffer,
+                velBuffer,
+                gridHeadsBuffer,
+                nextParticleBuffer,
+                gridCols,
+                gridRows,
+                particleCount,
+                GridCellSize,
+                screenWidth,
+                screenHeight,
+                WallMargin,
+                WallForce,
+                GravityY,
+                RepulsionForce,
+                DampingFactor,
+                CollisionRadius,
+                ParticleMass,
+                isLeftMouseDown ? 1 : 0,
+                mousePosition.X,
+                mousePosition.Y,
+                MouseRadius,
+                mouseForce
+            ));
+
+            device.For(particleCount, new UpdateParticlesShaderOpt(
+                posBuffer,
+                velBuffer,
+                accBuffer,
+                particleCount,
+                dt,
+                screenWidth,
+                screenHeight
+            ));
         }
 
         private void SpawnParticles()
