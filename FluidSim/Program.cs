@@ -76,7 +76,7 @@ namespace FluidSimulation
         private const int ParticlesToSpawn = 10;
 
         private const float WallMargin = 25f;
-        private const float WallForce = 2000f + GravityY;
+        private const float WallForce = 200 + GravityY;
         private const float GravityY = 9.81f * 100f;
 
         // GPU Buffers (ComputeSharp)
@@ -98,7 +98,7 @@ namespace FluidSimulation
         private const float RepulsionForce = 2000f;
         private const float DampingFactor = 10f;
 
-        private const float PhysikHzRate = 100.0f;
+        private const float PhysikHzRate = 66.0f;
 
         private const int GridCellSize = 10;
         private int gridCols;

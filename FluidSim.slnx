@@ -1,3 +1,4 @@
 <Solution>
   <Project Path="FluidSim/FluidSim.csproj" />
+  <Project Path="FluidSimCpp/FluidSimCpp.vcxproj" Id="d0189185-8ec5-43e2-918a-5436089b88a8" />
 </Solution>

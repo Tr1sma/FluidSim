@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(where:*)",
+      "Bash(curl:*)",
+      "Bash(unzip:*)",
+      "Bash(python -m glad:*)",
+      "Bash(\"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/MSBuild.exe\" \"C:/Users/ben.sowieja/source/repos/FluidSim/FluidSim/FluidSimCpp/FluidSimCpp.vcxproj\" /p:Configuration=Release /p:Platform=x64 /m /nologo /v:minimal)",
+      "Bash(cmd.exe:*)",
+      "Bash(MSVC=\"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/MSBuild.exe\":*)",
+      "Bash(PROJ=\"C:\\\\Users\\\\ben.sowieja\\\\source\\\\repos\\\\FluidSim\\\\FluidSim\\\\FluidSimCpp\\\\FluidSimCpp.vcxproj\")",
+      "Bash(\"$MSVC\" \"$PROJ\" -p:Configuration=Release -p:Platform=x64 -m -nologo -v:minimal)"
+    ]
+  }
+}
